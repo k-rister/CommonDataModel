@@ -35,6 +35,9 @@ jobs:
       - uses: actions/setup-node@v3
         with:
           node-version: "20.7.0"
+      - name: install cdmq dependencies
+        run: npm install --no-fund --no-audit
+        working-directory: queries/cdmq
       - name: fail if javascript files are not formatted
         run: npx prettier **/*.js --check
         env:
