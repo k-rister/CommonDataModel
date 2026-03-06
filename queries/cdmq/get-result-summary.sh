@@ -13,6 +13,13 @@
 
 project_dir=$(dirname `readlink -e $0`)
 pushd "$project_dir" >/dev/null
+if ! command -v npm >/dev/null 2>&1; then
+    echo "Error: npm is not installed. Please install Node.js and npm." >&2
+    popd >/dev/null
+    exit 1
+fi
+echo "Resolving cdmq dependencies..." >&2
+npm install --no-fund --no-audit 2>&1 | tail -1 >&2
 node ./get-result-summary.js "$@"
 rc=$?
 popd >/dev/null
