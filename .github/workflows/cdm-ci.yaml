@@ -1,21 +1,8 @@
 name: cdm-ci
 
-# Controls when the action will run.
 on:
-  # Triggers the workflow on pull request events but only for the master branch
-  # ignore pull requests that only change documentation/license files
   pull_request:
     branches: [ master ]
-    paths-ignore:
-      - LICENSE
-      - '**.md'
-      - '.github/rulesets/**'
-      - .github/workflows/run-crucible-tracking.yaml
-      - .github/workflows/faux-crucible-ci.yaml
-      - .github/workflows/faux-cdm-ci.yaml
-      - 'docs/**'
-
-  # Allows you to run this workflow manually from the Actions tab
   workflow_dispatch:
 
 concurrency:
@@ -23,21 +10,62 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # Job to test installation
-  cdm-ci:
-    # Job will run on github-hosted runner
-    runs-on: ubuntu-latest
-
-    # Steps represent a sequence of tasks that will be executed as part of the job
+  changes:
+    runs-on: [ self-hosted, workflow-overhead ]
+    outputs:
+      real-ci: ${{ steps.filter.outputs.real-ci }}
+      faux-ci: ${{ steps.filter.outputs.faux-ci }}
     steps:
-      # Checks-out your repository under $GITHUB_WORKSPACE, so your job can access it
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            real-ci:
+              - '**'
+              - '!LICENSE'
+              - '!**.md'
+              - '!.github/rulesets/**'
+              - '!.github/workflows/run-crucible-tracking.yaml'
+              - '!.github/workflows/crucible-ci.yaml'
+              - '!.github/workflows/cdm-ci.yaml'
+              - '!docs/**'
+            faux-ci:
+              - 'LICENSE'
+              - '**.md'
+              - '.github/rulesets/**'
+              - '.github/workflows/run-crucible-tracking.yaml'
+              - '.github/workflows/crucible-ci.yaml'
+              - '.github/workflows/cdm-ci.yaml'
+              - 'docs/**'
+
+  real-cdm-ci:
+    runs-on: ubuntu-latest
+    needs: changes
+    if: ${{ needs.changes.outputs.real-ci == 'true' }}
+    steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v3
         with:
-          node-version: "20.7.0"
+          node-version: "22.22.0"
       - name: fail if javascript files are not formatted
         run: npx prettier **/*.js --check
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+  faux-cdm-ci:
+    runs-on: [ self-hosted, workflow-overhead ]
+    needs: changes
+    if: ${{ needs.changes.outputs.faux-ci == 'true' && needs.changes.outputs.real-ci == 'false' }}
+    steps:
+      - run: 'echo "faux-cdm-ci-complete"'
 
+  cdm-ci-complete:
+    runs-on: [ self-hosted, workflow-overhead ]
+    needs: [ real-cdm-ci, faux-cdm-ci ]
+    # the always() will make this step run if one of the "needs" is
+    # skipped (which should always be the case) but the other
+    # completes successfully
+    if: always()
+    steps:
+      - run: 'echo "cdm-ci complete"'
