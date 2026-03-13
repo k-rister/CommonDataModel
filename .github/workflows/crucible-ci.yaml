@@ -3,17 +3,41 @@ name: crucible-ci
 on:
   pull_request:
     branches: [ master ]
-    paths-ignore:
-    - LICENSE
-    - '**.md'
-    - '.github/rulesets/**'
-    - .github/workflows/run-crucible-tracking.yaml
-    - .github/workflows/faux-crucible-ci.yaml
-    - 'docs/**'
   workflow_dispatch:
 
 jobs:
-  call-core-crucible-ci:
+  changes:
+    runs-on: [ self-hosted, workflow-overhead ]
+    outputs:
+      real-ci: ${{ steps.filter.outputs.real-ci }}
+      faux-ci: ${{ steps.filter.outputs.faux-ci }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            real-ci:
+              - '**'
+              - '!LICENSE'
+              - '!**.md'
+              - '!.github/rulesets/**'
+              - '!.github/workflows/run-crucible-tracking.yaml'
+              - '!.githuw/workflows/crucible-ci.yaml'
+              - '!.githuw/workflows/cdm-ci.yaml'
+              - '!docs/**'
+            faux-ci:
+              - 'LICENSE'
+              - '**.md'
+              - '.github/rulesets/**'
+              - '.github/workflows/run-crucible-tracking.yaml'
+              - '.github/workflows/crucible-ci.yaml'
+              - '.github/workflows/cdm-ci.yaml'
+              - 'docs/**'
+
+  call-real-core-crucible-ci:
+    needs: changes
+    if: ${{ needs.changes.outputs.real-ci == 'true' }}
     uses: perftool-incubator/crucible-ci/.github/workflows/core-crucible-ci.yaml@main
     with:
       ci_target: "CommonDataModel"
@@ -23,3 +47,18 @@ jobs:
     secrets:
       ci_registry_auth: ${{ secrets.CRUCIBLE_CI_ENGINES_REGISTRY_AUTH }}
       quay_oauth_token: ${{ secrets.CRUCIBLE_QUAYIO_OAUTH_TOKEN }}
+
+  call-faux-core-crucible-ci:
+    needs: changes
+    if: ${{ needs.changes.outputs.faux-ci == 'true' && needs.changes.outputs.real-ci == 'false' }}
+    uses: perftool-incubator/crucible-ci/.github/workflows/faux-core-crucible-ci.yaml@main
+
+  crucible-ci-complete:
+    runs-on: [ self-hosted, workflow-overhead ]
+    needs: [ call-real-core-crucible-ci, call-faux-core-crucible-ci ]
+    # the always() will make this step run if one of the "needs" is
+    # skipped (which should always be the case) but the other
+    # completes successfully
+    if: always()
+    steps:
+      - run: 'echo "crucible-ci complete"'
