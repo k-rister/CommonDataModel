@@ -1,5 +1,13 @@
 # cdmq
 
+## Prerequisites
+
+[Node.js](https://nodejs.org) and npm must be installed. Dependencies are installed automatically when you run any of the shell wrapper scripts (e.g., `get-result-summary.sh`). You can also install them manually:
+
+```bash
+./setup.sh
+```
+
 ## Introduction
 
 The contents of this directory contain a collection of scripts in Javascript intended to be executed with [node.js](https://nodejs.org). These scripts get data from an OpenSearch instance. The data must be in Common Data Format. which is documented in this project under [templates](../templates). The scripts here are meant to help inspect, compare, and export data from benchmarks and performance & resource-utilization tools, in order to report and investigate performance.
