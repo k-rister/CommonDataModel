@@ -5,6 +5,10 @@ on:
     branches: [ master ]
   workflow_dispatch:
 
+concurrency:
+  group: ${{ github.ref }}/crucible-ci
+  cancel-in-progress: true
+
 jobs:
   changes:
     runs-on: [ self-hosted, workflow-overhead ]
@@ -27,7 +31,7 @@ jobs:
 
   call-real-core-crucible-ci:
     needs: changes
-    if: ${{ needs.changes.outputs.only-docs != 'true' }}
+    if: ${{ github.event_name == 'workflow_dispatch' || needs.changes.outputs.only-docs != 'true' }}
     uses: perftool-incubator/crucible-ci/.github/workflows/core-crucible-ci.yaml@main
     with:
       ci_target: "CommonDataModel"
@@ -40,7 +44,7 @@ jobs:
 
   call-faux-core-crucible-ci:
     needs: changes
-    if: ${{ needs.changes.outputs.only-docs == 'true' }}
+    if: ${{ github.event_name != 'workflow_dispatch' && needs.changes.outputs.only-docs == 'true' }}
     uses: perftool-incubator/crucible-ci/.github/workflows/faux-core-crucible-ci.yaml@main
 
   crucible-ci-complete:
