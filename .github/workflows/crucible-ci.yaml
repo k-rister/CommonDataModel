@@ -9,35 +9,25 @@ jobs:
   changes:
     runs-on: [ self-hosted, workflow-overhead ]
     outputs:
-      real-ci: ${{ steps.filter.outputs.real-ci }}
-      faux-ci: ${{ steps.filter.outputs.faux-ci }}
+      only-docs: ${{ steps.filter.outputs.only_changed }}
     steps:
       - uses: actions/checkout@v4
-      - uses: dorny/paths-filter@v3
+      - uses: tj-actions/changed-files@v47
         id: filter
         with:
-          filters: |
-            real-ci:
-              - '**'
-              - '!LICENSE'
-              - '!**.md'
-              - '!.github/rulesets/**'
-              - '!.github/workflows/run-crucible-tracking.yaml'
-              - '!.githuw/workflows/crucible-ci.yaml'
-              - '!.githuw/workflows/cdm-ci.yaml'
-              - '!docs/**'
-            faux-ci:
-              - 'LICENSE'
-              - '**.md'
-              - '.github/rulesets/**'
-              - '.github/workflows/run-crucible-tracking.yaml'
-              - '.github/workflows/crucible-ci.yaml'
-              - '.github/workflows/cdm-ci.yaml'
-              - 'docs/**'
+          files: |
+            LICENSE
+            *.md
+            **/*.md
+            .github/rulesets/**
+            .github/workflows/run-crucible-tracking.yaml
+            .github/workflows/crucible-ci.yaml
+            .github/workflows/cdm-ci.yaml
+            docs/**
 
   call-real-core-crucible-ci:
     needs: changes
-    if: ${{ needs.changes.outputs.real-ci == 'true' }}
+    if: ${{ needs.changes.outputs.only-docs != 'true' }}
     uses: perftool-incubator/crucible-ci/.github/workflows/core-crucible-ci.yaml@main
     with:
       ci_target: "CommonDataModel"
@@ -50,7 +40,7 @@ jobs:
 
   call-faux-core-crucible-ci:
     needs: changes
-    if: ${{ needs.changes.outputs.faux-ci == 'true' && needs.changes.outputs.real-ci == 'false' }}
+    if: ${{ needs.changes.outputs.only-docs == 'true' }}
     uses: perftool-incubator/crucible-ci/.github/workflows/faux-core-crucible-ci.yaml@main
 
   crucible-ci-complete:
