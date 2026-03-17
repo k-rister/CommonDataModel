@@ -5,6 +5,10 @@ on:
     branches: [ master ]
   workflow_dispatch:
 
+concurrency:
+  group: ${{ github.ref }}/crucible-ci
+  cancel-in-progress: true
+
 jobs:
   changes:
     runs-on: [ self-hosted, workflow-overhead ]
