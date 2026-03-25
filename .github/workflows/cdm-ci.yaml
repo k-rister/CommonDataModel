@@ -11,7 +11,7 @@ concurrency:
 
 jobs:
   changes:
-    runs-on: [ self-hosted, workflow-overhead ]
+    runs-on: ubuntu-latest
     outputs:
       only-docs: ${{ steps.filter.outputs.only_changed }}
     steps:
@@ -47,14 +47,14 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   faux-cdm-ci:
-    runs-on: [ self-hosted, workflow-overhead ]
+    runs-on: ubuntu-latest
     needs: changes
     if: ${{ github.event_name != 'workflow_dispatch' && needs.changes.outputs.only-docs == 'true' }}
     steps:
       - run: 'echo "faux-cdm-ci-complete"'
 
   cdm-ci-complete:
-    runs-on: [ self-hosted, workflow-overhead ]
+    runs-on: ubuntu-latest
     needs: [ real-cdm-ci, faux-cdm-ci ]
     # the always() will make this step run if one of the "needs" is
     # skipped (which should always be the case) but the other
