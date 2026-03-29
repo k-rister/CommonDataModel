@@ -2665,8 +2665,8 @@ getMetricGroupsFromBreakouts = async function (instance, sets, yearDotMonth) {
           );
         } else {
           // Not a regex pattern, handle as literal value(s)
-          // Check if the value contains multiple comma-separated values
-          var values = value.split(',');
+          // Multiple values are separated by '+': field=value1+value2
+          var values = value.split('+');
           if (values.length > 1) {
             // Multiple values: use "terms" query (note the plural)
             q.query.bool.filter.push(
