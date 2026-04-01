@@ -156,13 +156,13 @@ async function main() {
   try {
     runsResp = await apiGet(baseUrl, '/api/v1/runs' + queryString);
   } catch (error) {
-    console.log('Error searching for runs: ' + error.message);
+    console.error('Error searching for runs: ' + error.message);
     process.exit(1);
   }
 
   var runIds = runsResp.runIds;
   if (typeof runIds == 'undefined' || runIds.length == 0) {
-    console.log('The run ID could not be found, exiting');
+    console.error('The run ID could not be found, exiting');
     process.exit(1);
   }
 
@@ -181,7 +181,7 @@ async function main() {
     try {
       tagsResp = await apiGet(baseUrl, runPrefix + '/tags');
     } catch (error) {
-      console.log('Error fetching tags for run ' + runId + ': ' + error.message);
+      console.error('Error fetching tags for run ' + runId + ': ' + error.message);
       process.exit(1);
     }
     var tags = tagsResp.tags;
@@ -198,7 +198,7 @@ async function main() {
     try {
       benchResp = await apiGet(baseUrl, runPrefix + '/benchmark');
     } catch (error) {
-      console.log('Error fetching benchmark for run ' + runId + ': ' + error.message);
+      console.error('Error fetching benchmark for run ' + runId + ': ' + error.message);
       process.exit(1);
     }
     var benchName = benchResp.benchmark;
@@ -210,12 +210,12 @@ async function main() {
     try {
       iterResp = await apiGet(baseUrl, runPrefix + '/iterations');
     } catch (error) {
-      console.log('Error fetching iterations for run ' + runId + ': ' + error.message);
+      console.error('Error fetching iterations for run ' + runId + ': ' + error.message);
       process.exit(1);
     }
     var benchIterations = iterResp.iterations;
     if (benchIterations.length == 0) {
-      console.log('There were no iterations found, exiting');
+      console.error('There were no iterations found, exiting');
       process.exit(1);
     }
 
@@ -230,7 +230,7 @@ async function main() {
         apiPost(baseUrl, runPrefix + '/iterations/primary-metric', iterBody)
       ]);
     } catch (error) {
-      console.log('Error fetching iteration data for run ' + runId + ': ' + error.message);
+      console.error('Error fetching iteration data for run ' + runId + ': ' + error.message);
       process.exit(1);
     }
     var iterParams = paramsResp.params;
@@ -249,7 +249,7 @@ async function main() {
         })
       ]);
     } catch (error) {
-      console.log('Error fetching sample data for run ' + runId + ': ' + error.message);
+      console.error('Error fetching sample data for run ' + runId + ': ' + error.message);
       process.exit(1);
     }
     var iterSampleStatuses = statusesResp.statuses;
@@ -260,7 +260,7 @@ async function main() {
     try {
       rangesResp = await apiPost(baseUrl, runPrefix + '/periods/range', { periodIds: iterPrimaryPeriodIds });
     } catch (error) {
-      console.log('Error fetching period ranges for run ' + runId + ': ' + error.message);
+      console.error('Error fetching period ranges for run ' + runId + ': ' + error.message);
       process.exit(1);
     }
     var iterPrimaryPeriodRanges = rangesResp.ranges;
@@ -304,7 +304,7 @@ async function main() {
     try {
       sourcesResp = await apiGet(baseUrl, runPrefix + '/metric-sources');
     } catch (error) {
-      console.log('Error fetching metric sources for run ' + runId + ': ' + error.message);
+      console.error('Error fetching metric sources for run ' + runId + ': ' + error.message);
       process.exit(1);
     }
     var metricSources = sourcesResp.sources;
@@ -313,7 +313,7 @@ async function main() {
     try {
       typesResp = await apiPost(baseUrl, runPrefix + '/metric-types', { sources: metricSources });
     } catch (error) {
-      console.log('Error fetching metric types for run ' + runId + ': ' + error.message);
+      console.error('Error fetching metric types for run ' + runId + ': ' + error.message);
       process.exit(1);
     }
     var metricTypes = typesResp.types;
@@ -347,7 +347,7 @@ async function main() {
             source = sourceType[0];
             type = sourceType[1];
           } else {
-            console.log('ERROR: sourceType array is an unexpected length, ' + sourceType.length);
+            console.error('ERROR: sourceType array is an unexpected length, ' + sourceType.length);
             process.exit(1);
           }
           sets.push({
@@ -392,7 +392,7 @@ async function main() {
       try {
         batchResults = await Promise.all(batchPromises);
       } catch (error) {
-        console.log('Error fetching metric data for run ' + runId + ': ' + error.message);
+        console.error('Error fetching metric data for run ' + runId + ': ' + error.message);
         process.exit(1);
       }
       for (var b = 0; b < batchResults.length; b++) {
