@@ -1,5 +1,6 @@
 const express = require('express');
 const cors = require('cors');
+const fs = require('fs');
 const app = express();
 const cdm = require('./cdm');
 const PORT = process.env.PORT || 3000;
@@ -7,6 +8,28 @@ const { Command } = require('commander');
 const program = new Command();
 
 var instances = [];
+
+// Server log file — written to /var/lib/crucible/logs/ if it exists, otherwise cwd
+var logDir = '/var/lib/crucible/logs';
+try {
+  fs.mkdirSync(logDir, { recursive: true });
+} catch (e) {
+  logDir = '.';
+}
+var logFile = logDir + '/cdm-server.log';
+var logStream = fs.createWriteStream(logFile, { flags: 'a' });
+
+function serverLog(msg) {
+  var line = '[' + new Date().toISOString() + '] ' + msg;
+  console.log(line);
+  logStream.write(line + '\n');
+}
+
+function serverError(msg) {
+  var line = '[' + new Date().toISOString() + '] ERROR: ' + msg;
+  console.error(line);
+  logStream.write(line + '\n');
+}
 
 function save_host(host) {
   var host_info = { host: host, header: { 'Content-Type': 'application/json' } };
@@ -51,7 +74,14 @@ if (instances.length == 0) {
   save_host('localhost:9200');
 }
 
+serverLog(
+  'Starting CDM server with ' + instances.length + ' instance(s): ' + JSON.stringify(instances.map((i) => i.host))
+);
+serverLog('Log file: ' + logFile);
+
 getInstancesInfo(instances);
+
+serverLog('Instance info after discovery: ' + JSON.stringify(instances, null, 2));
 
 app.use(cors());
 app.use(express.json());
@@ -90,7 +120,7 @@ async function resolveRun(req, res, next) {
     req.cdm = { instance, yearDotMonth, runId };
     next();
   } catch (error) {
-    console.error('Error in resolveRun middleware:', error);
+    serverError('Error in resolveRun middleware:', error);
     res.status(500).json({
       code: 'INTERNAL_ERROR',
       error: 'Failed to resolve run: ' + error.message
@@ -147,10 +177,10 @@ app.get('/api/v1/runs', async (req, res) => {
       runIds = [];
     }
 
-    console.log('[' + Date.now() + '] GET /api/v1/runs returned ' + runIds.length + ' run(s)');
+    serverLog('[' + Date.now() + '] GET /api/v1/runs returned ' + runIds.length + ' run(s)');
     res.json({ runIds: runIds });
   } catch (error) {
-    console.error('Error in GET /api/v1/runs:', error);
+    serverError('Error in GET /api/v1/runs:', error);
     res.status(500).json({
       code: 'INTERNAL_ERROR',
       error: 'Failed to search for runs: ' + error.message
@@ -168,10 +198,10 @@ app.get('/api/v1/run/:id/tags', resolveRun, async (req, res) => {
     if (typeof tags == 'undefined') {
       tags = [];
     }
-    console.log('[' + Date.now() + '] GET /api/v1/run/' + runId + '/tags returned ' + tags.length + ' tag(s)');
+    serverLog('[' + Date.now() + '] GET /api/v1/run/' + runId + '/tags returned ' + tags.length + ' tag(s)');
     res.json({ tags: tags });
   } catch (error) {
-    console.error('Error in GET /api/v1/run/:id/tags:', error);
+    serverError('Error in GET /api/v1/run/:id/tags:', error);
     res.status(500).json({
       code: 'INTERNAL_ERROR',
       error: 'Failed to get tags: ' + error.message
@@ -192,10 +222,10 @@ app.get('/api/v1/run/:id/benchmark', resolveRun, async (req, res) => {
         error: 'No benchmark name found for run ' + runId
       });
     }
-    console.log('[' + Date.now() + '] GET /api/v1/run/' + runId + '/benchmark returned: ' + benchmarkName);
+    serverLog('[' + Date.now() + '] GET /api/v1/run/' + runId + '/benchmark returned: ' + benchmarkName);
     res.json({ benchmark: benchmarkName });
   } catch (error) {
-    console.error('Error in GET /api/v1/run/:id/benchmark:', error);
+    serverError('Error in GET /api/v1/run/:id/benchmark:', error);
     res.status(500).json({
       code: 'INTERNAL_ERROR',
       error: 'Failed to get benchmark name: ' + error.message
@@ -218,7 +248,7 @@ app.get('/api/v1/run/:id/iterations', resolveRun, async (req, res) => {
     );
     res.json({ iterations: iterations });
   } catch (error) {
-    console.error('Error in GET /api/v1/run/:id/iterations:', error);
+    serverError('Error in GET /api/v1/run/:id/iterations:', error);
     res.status(500).json({
       code: 'INTERNAL_ERROR',
       error: 'Failed to get iterations: ' + error.message
@@ -257,7 +287,7 @@ app.post('/api/v1/run/:id/iterations/params', resolveRun, async (req, res) => {
     );
     res.json({ params: params });
   } catch (error) {
-    console.error('Error in POST /api/v1/run/:id/iterations/params:', error);
+    serverError('Error in POST /api/v1/run/:id/iterations/params:', error);
     res.status(500).json({
       code: 'INTERNAL_ERROR',
       error: 'Failed to get iteration params: ' + error.message
@@ -296,7 +326,7 @@ app.post('/api/v1/run/:id/iterations/primary-period-name', resolveRun, async (re
     );
     res.json({ periodNames: periodNames });
   } catch (error) {
-    console.error('Error in POST /api/v1/run/:id/iterations/primary-period-name:', error);
+    serverError('Error in POST /api/v1/run/:id/iterations/primary-period-name:', error);
     res.status(500).json({
       code: 'INTERNAL_ERROR',
       error: 'Failed to get primary period names: ' + error.message
@@ -336,7 +366,7 @@ app.post('/api/v1/run/:id/iterations/samples', resolveRun, async (req, res) => {
     );
     res.json({ samples: samples });
   } catch (error) {
-    console.error('Error in POST /api/v1/run/:id/iterations/samples:', error);
+    serverError('Error in POST /api/v1/run/:id/iterations/samples:', error);
     res.status(500).json({
       code: 'INTERNAL_ERROR',
       error: 'Failed to get samples: ' + error.message
@@ -365,10 +395,10 @@ app.post('/api/v1/run/:id/samples/statuses', resolveRun, async (req, res) => {
     if (typeof statuses == 'undefined') {
       statuses = [];
     }
-    console.log('[' + Date.now() + '] POST /api/v1/run/' + runId + '/samples/statuses completed');
+    serverLog('[' + Date.now() + '] POST /api/v1/run/' + runId + '/samples/statuses completed');
     res.json({ statuses: statuses });
   } catch (error) {
-    console.error('Error in POST /api/v1/run/:id/samples/statuses:', error);
+    serverError('Error in POST /api/v1/run/:id/samples/statuses:', error);
     res.status(500).json({
       code: 'INTERNAL_ERROR',
       error: 'Failed to get sample statuses: ' + error.message
@@ -403,10 +433,10 @@ app.post('/api/v1/run/:id/samples/primary-period-id', resolveRun, async (req, re
     if (typeof periodIds == 'undefined') {
       periodIds = [];
     }
-    console.log('[' + Date.now() + '] POST /api/v1/run/' + runId + '/samples/primary-period-id completed');
+    serverLog('[' + Date.now() + '] POST /api/v1/run/' + runId + '/samples/primary-period-id completed');
     res.json({ periodIds: periodIds });
   } catch (error) {
-    console.error('Error in POST /api/v1/run/:id/samples/primary-period-id:', error);
+    serverError('Error in POST /api/v1/run/:id/samples/primary-period-id:', error);
     res.status(500).json({
       code: 'INTERNAL_ERROR',
       error: 'Failed to get primary period IDs: ' + error.message
@@ -435,10 +465,10 @@ app.post('/api/v1/run/:id/periods/range', resolveRun, async (req, res) => {
     if (typeof ranges == 'undefined') {
       ranges = [];
     }
-    console.log('[' + Date.now() + '] POST /api/v1/run/' + runId + '/periods/range completed');
+    serverLog('[' + Date.now() + '] POST /api/v1/run/' + runId + '/periods/range completed');
     res.json({ ranges: ranges });
   } catch (error) {
-    console.error('Error in POST /api/v1/run/:id/periods/range:', error);
+    serverError('Error in POST /api/v1/run/:id/periods/range:', error);
     res.status(500).json({
       code: 'INTERNAL_ERROR',
       error: 'Failed to get period ranges: ' + error.message
@@ -478,7 +508,7 @@ app.post('/api/v1/run/:id/iterations/primary-metric', resolveRun, async (req, re
     );
     res.json({ primaryMetrics: primaryMetrics });
   } catch (error) {
-    console.error('Error in POST /api/v1/run/:id/iterations/primary-metric:', error);
+    serverError('Error in POST /api/v1/run/:id/iterations/primary-metric:', error);
     res.status(500).json({
       code: 'INTERNAL_ERROR',
       error: 'Failed to get primary metrics: ' + error.message
@@ -502,7 +532,7 @@ app.get('/api/v1/run/:id/metric-sources', resolveRun, async (req, res) => {
     );
     res.json({ sources: sources });
   } catch (error) {
-    console.error('Error in GET /api/v1/run/:id/metric-sources:', error);
+    serverError('Error in GET /api/v1/run/:id/metric-sources:', error);
     res.status(500).json({
       code: 'INTERNAL_ERROR',
       error: 'Failed to get metric sources: ' + error.message
@@ -544,7 +574,7 @@ app.post('/api/v1/run/:id/metric-types', resolveRun, async (req, res) => {
     );
     res.json({ types: types });
   } catch (error) {
-    console.error('Error in POST /api/v1/run/:id/metric-types:', error);
+    serverError('Error in POST /api/v1/run/:id/metric-types:', error);
     res.status(500).json({
       code: 'INTERNAL_ERROR',
       error: 'Failed to get metric types: ' + error.message
@@ -559,7 +589,7 @@ app.post('/api/v1/metric-data', async (req, res) => {
   try {
     var { run, period, begin, end, source, type, resolution, breakout, filter, instances: reqInstances } = req.body;
 
-    console.log('[' + Date.now() + '] Fetching metric data with parameters:', {
+    serverLog('[' + Date.now() + '] Fetching metric data with parameters:', {
       run,
       period,
       begin,
@@ -663,7 +693,7 @@ app.post('/api/v1/metric-data', async (req, res) => {
     // Return the data
     res.json(metric_data);
   } catch (error) {
-    console.error('Error in /api/v1/metric-data:', error);
+    serverError('Error in /api/v1/metric-data:', error);
     res.status(500).json({
       code: 'INTERNAL_ERROR',
       error: 'Internal server error while fetching metric data',
@@ -679,7 +709,7 @@ app.get('/health', (req, res) => {
 
 // Error handling middleware
 app.use((error, req, res, next) => {
-  console.error('Unhandled error:', error);
+  serverError('Unhandled error: ' + error);
   res.status(500).json({
     code: 'INTERNAL_ERROR',
     error: 'Internal server error',
@@ -697,9 +727,9 @@ app.use((req, res) => {
 
 // Start server
 app.listen(PORT, () => {
-  console.log(`CDM Query Server running on port ${PORT}`);
-  console.log(`API endpoints: http://localhost:${PORT}/api/v1/`);
-  console.log(`Health check: http://localhost:${PORT}/health`);
+  serverLog('CDM Query Server running on port ' + PORT);
+  serverLog('API endpoints: http://localhost:' + PORT + '/api/v1/');
+  serverLog('Health check: http://localhost:' + PORT + '/health');
 });
 
 module.exports = app;
