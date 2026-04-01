@@ -126,6 +126,31 @@ if (!program.outputDir) {
 if (!program.outputFormat) {
   program.outputFormat = [''];
 }
+
+// When --output-dir is specified, capture console.log and console.error to files
+const fs = require('fs');
+var stdoutStream = null;
+var stderrStream = null;
+if (program.outputDir) {
+  stdoutStream = fs.createWriteStream(program.outputDir + '/get-result-summary-stdout.txt');
+  stderrStream = fs.createWriteStream(program.outputDir + '/get-result-summary-stderr.txt');
+
+  var origLog = console.log;
+  var origError = console.error;
+
+  console.log = function () {
+    var msg = Array.prototype.map.call(arguments, String).join(' ');
+    origLog.apply(console, arguments);
+    stdoutStream.write(msg + '\n');
+  };
+
+  console.error = function () {
+    var msg = Array.prototype.map.call(arguments, String).join(' ');
+    origError.apply(console, arguments);
+    stderrStream.write(msg + '\n');
+  };
+}
+
 var txt_summary = '';
 
 function logOutput(str, formats) {
