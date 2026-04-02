@@ -295,7 +295,6 @@ async function main() {
       var col = 2;
       subKeys.forEach((subKey) => {
         var subMetric = subKey.replace(/<(\w+)>/, '$1');
-        i;
         labels[row][col] = subMetric;
         col++;
       });
