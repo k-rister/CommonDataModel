@@ -107,6 +107,9 @@ async function resolveRun(req, res, next) {
       });
     }
 
+    // Refresh instance index info before querying
+    getInstancesInfo(instances);
+
     const instance = await findInstanceFromRun(instances, runId);
     if (instance == null) {
       return res.status(404).json({
@@ -160,6 +163,9 @@ app.get('/api/v1/runs', async (req, res) => {
         error: 'No OpenSearch instances configured'
       });
     }
+
+    // Refresh instance index info before querying
+    getInstancesInfo(instances);
 
     var allInstanceRunIds = [];
     for (const instance of instances) {
@@ -613,10 +619,8 @@ app.post('/api/v1/metric-data', async (req, res) => {
       });
     }
 
-    // If instances were provided in the request, we need to call getInstancesInfo on them
-    if (reqInstances && reqInstances.length > 0) {
-      getInstancesInfo(instancesToUse);
-    }
+    // Refresh instance index info before querying
+    getInstancesInfo(instancesToUse);
 
     var yearDotMonth;
     var instance;
