@@ -1,6 +1,7 @@
 const express = require('express');
 const cors = require('cors');
 const fs = require('fs');
+const path = require('path');
 const app = express();
 const cdm = require('./cdm');
 const PORT = process.env.PORT || 3000;
@@ -156,6 +157,10 @@ app.get('/api/v1/runs', async (req, res) => {
       termKeys.push('run.harness');
       values.push([req.query.harness]);
     }
+    if (req.query.benchmark) {
+      termKeys.push('run.benchmark');
+      values.push([req.query.benchmark]);
+    }
 
     if (!instances || instances.length === 0) {
       return res.status(503).json({
@@ -172,7 +177,8 @@ app.get('/api/v1/runs', async (req, res) => {
       if (invalidInstance(instance)) {
         continue;
       }
-      var instanceRunIds = await cdm.mSearch(instance, 'run', '@*', termKeys, values, 'run.run-uuid', null, 1000);
+      var ydm = getYdm(instance, 'run', req);
+      var instanceRunIds = await cdm.mSearch(instance, 'run', ydm, termKeys, values, 'run.run-uuid', null, 1000);
       if (typeof instanceRunIds[0] != 'undefined') {
         allInstanceRunIds.push(instanceRunIds[0]);
       }
@@ -181,6 +187,61 @@ app.get('/api/v1/runs', async (req, res) => {
     var runIds = cdm.consolidateAllArrays(allInstanceRunIds);
     if (typeof runIds == 'undefined') {
       runIds = [];
+    }
+
+    // Helper: get run IDs from a cross-index aggregation and intersect with current set
+    async function intersectRunIds(runIdSet, fetchFn) {
+      var crossIds = [];
+      for (const instance of instances) {
+        if (invalidInstance(instance)) continue;
+        var result = await fetchFn(instance);
+        if (result && result[0]) crossIds.push(result[0]);
+      }
+      var consolidated = cdm.consolidateAllArrays(crossIds) || [];
+      var crossSet = new Set(consolidated);
+      return runIdSet.filter((id) => crossSet.has(id));
+    }
+
+    // Filter by primary metric name (e.g., "uperf::Gbps")
+    if (req.query.primaryMetric) {
+      runIds = await intersectRunIds(runIds, (inst) =>
+        cdm.getRunIdsByPrimaryMetric(inst, getYdm(inst, 'iteration', req), req.query.primaryMetric)
+      );
+    }
+
+    // Filter by tag pairs: tags=[{"name":"x","val":"y"}, ...]
+    var tagFilters = [];
+    if (req.query.tags) {
+      try {
+        tagFilters = JSON.parse(req.query.tags);
+      } catch (e) {
+        /* ignore parse errors */
+      }
+    }
+    // Support legacy single tag filter
+    if (tagFilters.length === 0 && (req.query.tagName || req.query.tagValue)) {
+      tagFilters.push({ name: req.query.tagName || '', val: req.query.tagValue || '' });
+    }
+    for (const tag of tagFilters) {
+      if (!tag.name && !tag.val) continue;
+      runIds = await intersectRunIds(runIds, (inst) =>
+        cdm.getRunIdsByTag(inst, getYdm(inst, 'tag', req), tag.name || null, tag.val || null)
+      );
+    }
+
+    // Filter by param pairs: params=[{"arg":"x","val":"y"}, ...]
+    if (req.query.params) {
+      try {
+        var paramFilters = JSON.parse(req.query.params);
+        for (const param of paramFilters) {
+          if (!param.arg || !param.val) continue;
+          runIds = await intersectRunIds(runIds, (inst) =>
+            cdm.getRunIdsByParam(inst, getYdm(inst, 'param', req), param.arg, param.val)
+          );
+        }
+      } catch (e) {
+        /* ignore parse errors */
+      }
     }
 
     serverLog('[' + Date.now() + '] GET /api/v1/runs returned ' + runIds.length + ' run(s)');
@@ -589,6 +650,129 @@ app.post('/api/v1/run/:id/metric-types', resolveRun, async (req, res) => {
 });
 
 // --------------------------------------------------------------------------------------------------------------
+// FIELD VALUE ENDPOINTS — return distinct values for search dropdowns
+// All accept optional ?start=YYYY.MM&end=YYYY.MM to limit index scope
+// --------------------------------------------------------------------------------------------------------------
+
+// Helper to build yearDotMonth for a given docType using request's start/end params
+function getYdm(instance, docType, req) {
+  var start = req.query.start || null;
+  var end = req.query.end || null;
+  return cdm.buildYearDotMonthRange(instance, docType, start, end);
+}
+
+async function getDistinctValues(instances, fetchFn) {
+  getInstancesInfo(instances);
+  var allValues = [];
+  for (const instance of instances) {
+    if (invalidInstance(instance)) continue;
+    var values = await fetchFn(instance);
+    if (values && values[0]) allValues.push(values[0]);
+  }
+  var consolidated = cdm.consolidateAllArrays(allValues);
+  return (consolidated || []).sort();
+}
+
+// Return available YYYY.MM values from index names (for date range selectors)
+app.get('/api/v1/fields/months', async (req, res) => {
+  try {
+    getInstancesInfo(instances);
+    var allMonths = new Set();
+    for (const instance of instances) {
+      if (invalidInstance(instance)) continue;
+      var months = cdm.getAvailableMonths(instance);
+      months.forEach((m) => allMonths.add(m));
+    }
+    var sorted = Array.from(allMonths).sort();
+    serverLog('GET /api/v1/fields/months returned ' + sorted.length + ' month(s)');
+    res.json({ values: sorted });
+  } catch (error) {
+    serverError('Error in GET /api/v1/fields/months: ' + error);
+    res.status(500).json({ code: 'INTERNAL_ERROR', error: 'Failed to get months: ' + error.message });
+  }
+});
+
+app.get('/api/v1/fields/benchmarks', async (req, res) => {
+  try {
+    var values = await getDistinctValues(instances, (inst) =>
+      cdm.getDistinctBenchmarks(inst, getYdm(inst, 'run', req))
+    );
+    serverLog('GET /api/v1/fields/benchmarks returned ' + values.length + ' value(s)');
+    res.json({ values: values });
+  } catch (error) {
+    serverError('Error in GET /api/v1/fields/benchmarks: ' + error);
+    res.status(500).json({ code: 'INTERNAL_ERROR', error: 'Failed to get benchmarks: ' + error.message });
+  }
+});
+
+app.get('/api/v1/fields/tag-names', async (req, res) => {
+  try {
+    var values = await getDistinctValues(instances, (inst) =>
+      cdm.getDistinctTagNames(inst, getYdm(inst, 'tag', req))
+    );
+    serverLog('GET /api/v1/fields/tag-names returned ' + values.length + ' value(s)');
+    res.json({ values: values });
+  } catch (error) {
+    serverError('Error in GET /api/v1/fields/tag-names: ' + error);
+    res.status(500).json({ code: 'INTERNAL_ERROR', error: 'Failed to get tag names: ' + error.message });
+  }
+});
+
+app.get('/api/v1/fields/tag-values', async (req, res) => {
+  try {
+    var tagName = req.query.name || null;
+    var values = await getDistinctValues(instances, (inst) =>
+      cdm.getDistinctTagValues(inst, getYdm(inst, 'tag', req), tagName)
+    );
+    serverLog('GET /api/v1/fields/tag-values returned ' + values.length + ' value(s)');
+    res.json({ values: values });
+  } catch (error) {
+    serverError('Error in GET /api/v1/fields/tag-values: ' + error);
+    res.status(500).json({ code: 'INTERNAL_ERROR', error: 'Failed to get tag values: ' + error.message });
+  }
+});
+
+app.get('/api/v1/fields/param-args', async (req, res) => {
+  try {
+    var values = await getDistinctValues(instances, (inst) =>
+      cdm.getDistinctParamArgs(inst, getYdm(inst, 'param', req))
+    );
+    serverLog('GET /api/v1/fields/param-args returned ' + values.length + ' value(s)');
+    res.json({ values: values });
+  } catch (error) {
+    serverError('Error in GET /api/v1/fields/param-args: ' + error);
+    res.status(500).json({ code: 'INTERNAL_ERROR', error: 'Failed to get param args: ' + error.message });
+  }
+});
+
+app.get('/api/v1/fields/param-values', async (req, res) => {
+  try {
+    var paramArg = req.query.arg || null;
+    var values = await getDistinctValues(instances, (inst) =>
+      cdm.getDistinctParamValues(inst, getYdm(inst, 'param', req), paramArg)
+    );
+    serverLog('GET /api/v1/fields/param-values returned ' + values.length + ' value(s)');
+    res.json({ values: values });
+  } catch (error) {
+    serverError('Error in GET /api/v1/fields/param-values: ' + error);
+    res.status(500).json({ code: 'INTERNAL_ERROR', error: 'Failed to get param values: ' + error.message });
+  }
+});
+
+app.get('/api/v1/fields/primary-metrics', async (req, res) => {
+  try {
+    var values = await getDistinctValues(instances, (inst) =>
+      cdm.getDistinctPrimaryMetrics(inst, getYdm(inst, 'iteration', req))
+    );
+    serverLog('GET /api/v1/fields/primary-metrics returned ' + values.length + ' value(s)');
+    res.json({ values: values });
+  } catch (error) {
+    serverError('Error in GET /api/v1/fields/primary-metrics: ' + error);
+    res.status(500).json({ code: 'INTERNAL_ERROR', error: 'Failed to get primary metrics: ' + error.message });
+  }
+});
+
+// --------------------------------------------------------------------------------------------------------------
 // POST /api/v1/metric-data — get metric data (existing endpoint, supports run or period)
 // --------------------------------------------------------------------------------------------------------------
 app.post('/api/v1/metric-data', async (req, res) => {
@@ -721,13 +905,25 @@ app.use((error, req, res, next) => {
   });
 });
 
-// Handle 404 for unknown routes
-app.use((req, res) => {
-  res.status(404).json({
-    code: 'ROUTE_NOT_FOUND',
-    error: 'Route not found: ' + req.method + ' ' + req.originalUrl
+// Serve the web UI static files (built React app)
+var webUiDist = path.join(__dirname, 'web-ui', 'dist');
+if (fs.existsSync(webUiDist)) {
+  app.use(express.static(webUiDist));
+
+  // SPA fallback: serve index.html for non-API routes
+  app.get('*path', (req, res) => {
+    res.sendFile(path.join(webUiDist, 'index.html'));
   });
-});
+  serverLog('Serving web UI from ' + webUiDist);
+} else {
+  // Handle 404 for unknown routes when no web UI is built
+  app.use((req, res) => {
+    res.status(404).json({
+      code: 'ROUTE_NOT_FOUND',
+      error: 'Route not found: ' + req.method + ' ' + req.originalUrl
+    });
+  });
+}
 
 // Start server
 app.listen(PORT, () => {

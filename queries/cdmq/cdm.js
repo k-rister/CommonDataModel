@@ -825,7 +825,9 @@ mSearch = async function (instance, index, yearDotMonth, termKeys, values, sourc
   if (typeof termKeys !== typeof []) return;
   if (typeof values !== typeof []) return;
   var jsonArr = [];
-  for (var i = 0; i < values[0].length; i++) {
+  // When no filters are provided, issue a single match-all query
+  var numQueries = termKeys.length === 0 ? 1 : values[0].length;
+  for (var i = 0; i < numQueries; i++) {
     var req = { query: { bool: { filter: [] } } };
     if (source !== '' && source !== null) {
       req._source = source;
@@ -840,6 +842,11 @@ mSearch = async function (instance, index, yearDotMonth, termKeys, values, sourc
         req.size = bigQuerySize;
       }
 
+      if (isDefined(sort)) req.sort = sort;
+    }
+    // When no term filters were added, set size/sort outside the loop
+    if (termKeys.length === 0) {
+      req.size = isDefined(size) ? size : bigQuerySize;
       if (isDefined(sort)) req.sort = sort;
     }
     // aggs is not an array, and is used the same for all queries
@@ -1374,6 +1381,134 @@ findYearDotMonthFromRun = async function (instance, runId) {
   }
 };
 exports.findYearDotMonthFromRun = findYearDotMonthFromRun;
+
+// --------------------------------------------------------------------------------------------------------------
+// DATE RANGE FUNCTIONS (for limiting index scope in searches)
+// --------------------------------------------------------------------------------------------------------------
+
+// Extract unique @YYYY.MM suffixes from the instance's known indices
+getAvailableMonths = function (instance) {
+  var months = new Set();
+  var ver = getCdmVer(instance);
+  if (ver == 'v7dev' || ver == 'v8dev') return [];
+  var indices = instance['indices'] && instance['indices'][ver] ? instance['indices'][ver] : [];
+  for (var i = 0; i < indices.length; i++) {
+    var match = indices[i].match(/@(\d{4}\.\d{2})$/);
+    if (match) months.add(match[1]);
+  }
+  return Array.from(months).sort();
+};
+exports.getAvailableMonths = getAvailableMonths;
+
+// Build a yearDotMonth pattern for a date range.
+// start/end are strings like "2025.01". Returns "@2025.01,<baseName><docType>@2025.02,..."
+// or "@*" if no range is specified.
+buildYearDotMonthRange = function (instance, docType, start, end) {
+  if (!start && !end) return '@*';
+  var ver = getCdmVer(instance);
+  if (ver == 'v7dev' || ver == 'v8dev') return '';
+
+  var available = getAvailableMonths(instance);
+  if (available.length === 0) return '@*';
+
+  var filtered = available.filter(function (m) {
+    if (start && m < start) return false;
+    if (end && m > end) return false;
+    return true;
+  });
+
+  if (filtered.length === 0) return '@*';
+
+  // For a single month, just return @YYYY.MM
+  if (filtered.length === 1) return '@' + filtered[0];
+
+  // For multiple months, build comma-separated full index names.
+  // The first entry is just @YYYY.MM (getIndexName prepends baseName+docType).
+  // Subsequent entries must be full index names since they go into the same URL.
+  var baseName = getIndexBaseName(instance);
+  var parts = ['@' + filtered[0]];
+  for (var i = 1; i < filtered.length; i++) {
+    parts.push(baseName + docType + '@' + filtered[i]);
+  }
+  return parts.join(',');
+};
+exports.buildYearDotMonthRange = buildYearDotMonthRange;
+
+// --------------------------------------------------------------------------------------------------------------
+// DISTINCT FIELD VALUE FUNCTIONS (for search dropdowns)
+// These use aggregations to return unique values from OpenSearch indices.
+// --------------------------------------------------------------------------------------------------------------
+
+getDistinctBenchmarks = async function (instance, yearDotMonth) {
+  return await mSearch(instance, 'run', yearDotMonth, [], [], null, { source: { terms: { field: 'run.benchmark', size: 10000 } } }, 0);
+};
+exports.getDistinctBenchmarks = getDistinctBenchmarks;
+
+// --------------------------------------------------------------------------------------------------------------
+getDistinctTagNames = async function (instance, yearDotMonth) {
+  return await mSearch(instance, 'tag', yearDotMonth, [], [], null, { source: { terms: { field: 'tag.name', size: 10000 } } }, 0);
+};
+exports.getDistinctTagNames = getDistinctTagNames;
+
+// --------------------------------------------------------------------------------------------------------------
+getDistinctTagValues = async function (instance, yearDotMonth, tagName) {
+  var termKeys = tagName ? ['tag.name'] : [];
+  var values = tagName ? [[tagName]] : [];
+  return await mSearch(instance, 'tag', yearDotMonth, termKeys, values, null, { source: { terms: { field: 'tag.val', size: 10000 } } }, 0);
+};
+exports.getDistinctTagValues = getDistinctTagValues;
+
+// --------------------------------------------------------------------------------------------------------------
+getDistinctParamArgs = async function (instance, yearDotMonth) {
+  return await mSearch(instance, 'param', yearDotMonth, [], [], null, { source: { terms: { field: 'param.arg', size: 10000 } } }, 0);
+};
+exports.getDistinctParamArgs = getDistinctParamArgs;
+
+// --------------------------------------------------------------------------------------------------------------
+getDistinctParamValues = async function (instance, yearDotMonth, paramArg) {
+  var termKeys = paramArg ? ['param.arg'] : [];
+  var values = paramArg ? [[paramArg]] : [];
+  return await mSearch(instance, 'param', yearDotMonth, termKeys, values, null, { source: { terms: { field: 'param.val', size: 10000 } } }, 0);
+};
+exports.getDistinctParamValues = getDistinctParamValues;
+
+// --------------------------------------------------------------------------------------------------------------
+getDistinctPrimaryMetrics = async function (instance, yearDotMonth) {
+  return await mSearch(instance, 'iteration', yearDotMonth, [], [], null, { source: { terms: { field: 'iteration.primary-metric', size: 10000 } } }, 0);
+};
+exports.getDistinctPrimaryMetrics = getDistinctPrimaryMetrics;
+
+// --------------------------------------------------------------------------------------------------------------
+// RUN ID LOOKUP FUNCTIONS (for filtering runs by related entities)
+// These aggregate run.run-uuid from non-run indices to find which runs match a filter.
+// --------------------------------------------------------------------------------------------------------------
+
+getRunIdsByParam = async function (instance, yearDotMonth, paramArg, paramVal) {
+  return await mSearch(instance, 'param', yearDotMonth, ['param.arg', 'param.val'], [[paramArg], [paramVal]], null, { source: { terms: { field: 'run.run-uuid', size: 10000 } } }, 0);
+};
+exports.getRunIdsByParam = getRunIdsByParam;
+
+// --------------------------------------------------------------------------------------------------------------
+getRunIdsByTag = async function (instance, yearDotMonth, tagName, tagVal) {
+  var termKeys = [];
+  var values = [];
+  if (tagName) {
+    termKeys.push('tag.name');
+    values.push([tagName]);
+  }
+  if (tagVal) {
+    termKeys.push('tag.val');
+    values.push([tagVal]);
+  }
+  return await mSearch(instance, 'tag', yearDotMonth, termKeys, values, null, { source: { terms: { field: 'run.run-uuid', size: 10000 } } }, 0);
+};
+exports.getRunIdsByTag = getRunIdsByTag;
+
+// --------------------------------------------------------------------------------------------------------------
+getRunIdsByPrimaryMetric = async function (instance, yearDotMonth, primaryMetric) {
+  return await mSearch(instance, 'iteration', yearDotMonth, ['iteration.primary-metric'], [[primaryMetric]], null, { source: { terms: { field: 'run.run-uuid', size: 10000 } } }, 0);
+};
+exports.getRunIdsByPrimaryMetric = getRunIdsByPrimaryMetric;
 
 // --------------------------------------------------------------------------------------------------------------
 // INSTANCE DISCOVERY FUNCTIONS
