@@ -650,6 +650,191 @@ app.post('/api/v1/run/:id/metric-types', resolveRun, async (req, res) => {
 });
 
 // --------------------------------------------------------------------------------------------------------------
+// POST /api/v1/iterations/details — batch-hydrate iterations for multiple runs
+// Body: { runIds: [...] }
+// Returns fully assembled iteration objects in a single request, using batched
+// mSearch calls to OpenSearch instead of per-run HTTP roundtrips.
+// --------------------------------------------------------------------------------------------------------------
+app.post('/api/v1/iterations/details', async (req, res) => {
+  try {
+    const { runIds } = req.body;
+
+    if (!Array.isArray(runIds) || runIds.length === 0) {
+      return res.status(400).json({
+        code: 'MISSING_RUN_IDS',
+        error: 'An array of run IDs is required in the request body'
+      });
+    }
+
+    if (!instances || instances.length === 0) {
+      return res.status(503).json({
+        code: 'NO_INSTANCES',
+        error: 'No OpenSearch instances configured'
+      });
+    }
+
+    getInstancesInfo(instances);
+
+    // Group runs by instance and yearDotMonth
+    var runGroups = []; // [{ instance, yearDotMonth, runIds: [...] }]
+    for (const runId of runIds) {
+      var instance = await findInstanceFromRun(instances, runId);
+      if (instance == null) {
+        serverLog('iterations/details: skipping run ' + runId + ' (not found)');
+        continue;
+      }
+      var yearDotMonth = await findYearDotMonthFromRun(instance, runId);
+
+      // Try to find existing group for this instance+ydm
+      var group = runGroups.find(
+        (g) => g.instance.host === instance.host && g.yearDotMonth === yearDotMonth
+      );
+      if (!group) {
+        group = { instance, yearDotMonth, runIds: [] };
+        runGroups.push(group);
+      }
+      group.runIds.push(runId);
+    }
+
+    var allIterations = [];
+
+    for (const group of runGroups) {
+      var inst = group.instance;
+      var ydm = group.yearDotMonth;
+      var gRunIds = group.runIds;
+
+      // Step 1: Batch-fetch run-level data for all runs in this group
+      var [benchmarks, iterationsByRun, tagsByRun] = await Promise.all([
+        cdm.mgetBenchmarkName(inst, gRunIds, ydm),
+        cdm.mgetIterations(inst, gRunIds, ydm),
+        cdm.mgetTags(inst, gRunIds, ydm)
+      ]);
+
+      // Collect all iteration IDs across all runs, tracking which run each belongs to
+      var allIterIds = [];
+      var iterToRunMap = []; // parallel array: iterToRunMap[i] = { runIdx, runId, benchmark, tags }
+      for (var r = 0; r < gRunIds.length; r++) {
+        var runIters = (iterationsByRun && iterationsByRun[r]) || [];
+        var benchmark = (benchmarks && benchmarks[r] && benchmarks[r][0]) || null;
+        var tags = (tagsByRun && tagsByRun[r]) || [];
+        for (var it = 0; it < runIters.length; it++) {
+          allIterIds.push(runIters[it]);
+          iterToRunMap.push({ runIdx: r, runId: gRunIds[r], benchmark, tags });
+        }
+      }
+
+      if (allIterIds.length === 0) continue;
+
+      // Step 2: Batch-fetch iteration-level data for all iterations
+      var [params, samples, primaryMetrics, periodNames] = await Promise.all([
+        cdm.mgetParams(inst, allIterIds, ydm),
+        cdm.mgetSamples(inst, allIterIds, ydm),
+        cdm.mgetPrimaryMetric(inst, allIterIds, ydm),
+        cdm.mgetPrimaryPeriodName(inst, allIterIds, ydm)
+      ]);
+
+      // Step 3: Batch-fetch sample statuses
+      var samplesByIter = samples || [];
+      var statuses = [];
+      if (samplesByIter.length > 0) {
+        statuses = await cdm.mgetSampleStatuses(inst, samplesByIter, ydm);
+        if (typeof statuses === 'undefined') statuses = [];
+      }
+
+      // Step 4: Compute common vs unique params
+      // Group iterations by run to determine common params within each run
+      var runIterGroups = {};
+      for (var i = 0; i < allIterIds.length; i++) {
+        var runId = iterToRunMap[i].runId;
+        if (!runIterGroups[runId]) runIterGroups[runId] = [];
+        runIterGroups[runId].push(i);
+      }
+
+      var commonParamsByRun = {};
+      var uniqueParamsByIter = {};
+
+      for (var runId in runIterGroups) {
+        var idxs = runIterGroups[runId];
+        var paramSets = idxs.map(function (idx) {
+          var p = (params && params[idx]) || [];
+          return Array.isArray(p) ? p : [];
+        });
+
+        var common = [];
+        var unique = [];
+
+        if (paramSets.length > 1) {
+          var first = paramSets[0];
+          for (var p = 0; p < first.length; p++) {
+            var param = first[p];
+            var isCommon = paramSets.every(function (ps) {
+              return ps.some(function (pp) {
+                return pp.arg === param.arg && pp.val === param.val;
+              });
+            });
+            if (isCommon) common.push(param);
+          }
+          for (var s = 0; s < paramSets.length; s++) {
+            unique.push(
+              paramSets[s].filter(function (pp) {
+                return !common.some(function (c) {
+                  return c.arg === pp.arg && c.val === pp.val;
+                });
+              })
+            );
+          }
+        } else {
+          if (paramSets.length === 1) unique.push(paramSets[0]);
+        }
+
+        commonParamsByRun[runId] = common;
+        for (var s = 0; s < idxs.length; s++) {
+          uniqueParamsByIter[idxs[s]] = unique[s] || [];
+        }
+      }
+
+      // Step 5: Assemble iteration objects
+      for (var i = 0; i < allIterIds.length; i++) {
+        var meta = iterToRunMap[i];
+        var iterSamples = (samplesByIter[i]) || [];
+        var iterStatuses = (statuses && statuses[i]) || [];
+        var passCount = iterStatuses.filter(function (s) { return s === 'pass'; }).length;
+        var failCount = iterStatuses.filter(function (s) { return s === 'fail'; }).length;
+
+        allIterations.push({
+          runId: meta.runId,
+          iterationId: allIterIds[i],
+          benchmark: meta.benchmark,
+          tags: meta.tags,
+          params: (params && params[i]) || [],
+          commonParams: commonParamsByRun[meta.runId] || [],
+          uniqueParams: uniqueParamsByIter[i] || [],
+          sampleCount: iterSamples.length,
+          passCount: passCount,
+          failCount: failCount,
+          primaryMetric: (primaryMetrics && primaryMetrics[i]) || null
+        });
+      }
+    }
+
+    serverLog(
+      'POST /api/v1/iterations/details: ' +
+        runIds.length +
+        ' run(s) -> ' +
+        allIterations.length +
+        ' iteration(s)'
+    );
+    res.json({ iterations: allIterations });
+  } catch (error) {
+    serverError('Error in POST /api/v1/iterations/details: ' + error);
+    res.status(500).json({
+      code: 'INTERNAL_ERROR',
+      error: 'Failed to get iteration details: ' + error.message
+    });
+  }
+});
+
+// --------------------------------------------------------------------------------------------------------------
 // FIELD VALUE ENDPOINTS — return distinct values for search dropdowns
 // All accept optional ?start=YYYY.MM&end=YYYY.MM to limit index scope
 // --------------------------------------------------------------------------------------------------------------

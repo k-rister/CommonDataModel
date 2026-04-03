@@ -2,95 +2,11 @@ import { useState, useCallback, useRef } from 'react';
 import * as api from '../api/cdm';
 import { timeWork, addEntry } from '../debugLog';
 
-// Given a list of run IDs, fetch full iteration details for all runs.
-// Returns a flat array of iteration objects.
+// Fetch fully hydrated iteration details for all runs in a single batch request.
+// The server handles all the mSearch batching internally.
 async function loadIterationsForRuns(runIds) {
-  const allIterations = [];
-
-  for (const runId of runIds) {
-    try {
-      const [benchRes, iterRes, tagRes] = await Promise.all([
-        api.getBenchmark(runId),
-        api.getIterations(runId),
-        api.getTags(runId),
-      ]);
-
-      const benchmark = benchRes.benchmark;
-      const tags = tagRes.tags || [];
-      const iterationIds = iterRes.iterations || [];
-
-      if (iterationIds.length === 0) continue;
-
-      const [paramsRes, samplesRes, primaryMetricRes, periodNameRes] = await Promise.all([
-        api.getIterationParams(runId, iterationIds),
-        api.getSamples(runId, iterationIds),
-        api.getPrimaryMetric(runId, iterationIds),
-        api.getPrimaryPeriodName(runId, iterationIds),
-      ]);
-
-      const params = paramsRes.params || [];
-      const samplesByIter = samplesRes.samples || [];
-      const primaryMetrics = primaryMetricRes.primaryMetrics || [];
-
-      // Get sample statuses
-      let statuses = [];
-      if (samplesByIter.length > 0) {
-        const statusRes = await api.getSampleStatuses(runId, samplesByIter);
-        statuses = statusRes.statuses || [];
-      }
-
-      // Compute common vs unique params
-      const paramSets = params.map((p) =>
-        Array.isArray(p) ? p : typeof p === 'object' ? Object.entries(p).map(([k, v]) => ({ arg: k, val: v })) : [],
-      );
-
-      const commonParams = [];
-      const uniqueParams = [];
-
-      if (paramSets.length > 1) {
-        const first = paramSets[0];
-        for (const param of first) {
-          const isCommon = paramSets.every((ps) => ps.some((p) => p.arg === param.arg && p.val === param.val));
-          if (isCommon) {
-            commonParams.push(param);
-          }
-        }
-        for (let i = 0; i < paramSets.length; i++) {
-          uniqueParams.push(paramSets[i].filter((p) => !commonParams.some((c) => c.arg === p.arg && c.val === p.val)));
-        }
-      } else {
-        if (paramSets.length === 1) {
-          uniqueParams.push(paramSets[0]);
-        }
-      }
-
-      for (let i = 0; i < iterationIds.length; i++) {
-        const iterSamples = samplesByIter[i] || [];
-        const iterStatuses = statuses[i] || [];
-        const passCount = iterStatuses.filter((s) => s === 'pass').length;
-        const failCount = iterStatuses.filter((s) => s === 'fail').length;
-        const pm = primaryMetrics[i];
-
-        allIterations.push({
-          runId,
-          iterationId: iterationIds[i],
-          benchmark,
-          tags,
-          params: paramSets[i] || [],
-          commonParams,
-          uniqueParams: uniqueParams[i] || [],
-          sampleCount: iterSamples.length,
-          passCount,
-          failCount,
-          primaryMetric: pm || null,
-        });
-      }
-    } catch (err) {
-      console.error(`Error loading run ${runId}:`, err);
-    }
-  }
-
-  return allIterations;
+  const res = await api.getIterationDetails(runIds);
+  return res.iterations || [];
 }
 
 // Compute default start month (3 months ago) in YYYY.MM format
