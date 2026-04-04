@@ -452,51 +452,56 @@ getCdmVerFromIndex = function (index) {
 // This will eliminate the need for other projects (like Crucible)
 // to maintain the indices.
 checkCreateIndex = function (instance, index) {
+  // Expand comma-separated multi-index patterns and check/create each one
+  var indices = index.includes(',') ? index.split(',') : [index];
+
   var retMsg = '';
   var retCode = 0;
 
-  var resp = getCdmVerFromIndex(index);
-  if (resp['ret-code'] != 0) {
-    retMsg = 'ERROR: calling getCdmVerFromIndex returned ' + resp['ret-msg'];
-    retCode = 1;
-    return createResponse(retCode, retMsg);
-  }
-  var cdmVer = resp['cdm-ver'];
+  for (var idx = 0; idx < indices.length; idx++) {
+    var thisIndex = indices[idx];
 
-  if (Object.keys(instance['indices']).includes(cdmVer)) {
-    if (instance['indices'][cdmVer].includes(index)) {
-      var retMsg = 'INFO: Not going to create index because index already exists';
+    var resp = getCdmVerFromIndex(thisIndex);
+    if (resp['ret-code'] != 0) {
+      retMsg = 'ERROR: calling getCdmVerFromIndex returned ' + resp['ret-msg'];
+      retCode = 1;
       return createResponse(retCode, retMsg);
     }
+    var cdmVer = resp['cdm-ver'];
+
+    if (Object.keys(instance['indices']).includes(cdmVer)) {
+      if (instance['indices'][cdmVer].includes(thisIndex)) {
+        continue;
+      }
+    }
+
+    var regExp = /\*$/;
+    var matches = regExp.exec(thisIndex);
+    if (matches) {
+      continue;
+    }
+
+    resp = getDocType(thisIndex);
+    if (resp['ret-code'] != 0) {
+      retMsg = 'ERROR: calling getDocType returned ' + resp['ret-msg'];
+      retCode = 1;
+      return createResponse(retCode, retMsg);
+    }
+    var docType = resp['doc-type'];
+
+    debuglog('checkCreateIndex(): got docType: [' + docType + ']');
+    var url = 'http://' + instance['host'] + '/' + thisIndex;
+    resp = request('PUT', url, { headers: instance['header'], body: JSON.stringify(indexDefs[cdmVer][docType]) });
+    var data = JSON.parse(resp.getBody());
+    //TODO: catch error and return with error
+    debuglog('response:::\n' + JSON.stringify(data, null, 2));
+    if (!Object.keys(instance['indices']).includes(cdmVer)) {
+      instance['indices'][cdmVer] = [];
+    }
+    instance['indices'][cdmVer].push(thisIndex);
   }
 
-  var regExp = /\*$/;
-  var matches = regExp.exec(index);
-  if (matches) {
-    retMsg = 'INFO: Not going to create index because it includes a wildcard: [' + index + ']';
-    return createResponse(retCode, retMsg);
-  }
-
-  resp = getDocType(index);
-  if (resp['ret-code'] != 0) {
-    retMsg = 'ERROR: calling getDocType returned ' + resp['ret-msg'];
-    retCode = 1;
-    return createResponse(retCode, retMsg);
-  }
-  var docType = resp['doc-type'];
-
-  debuglog('checkCreateIndex(): got docType: [' + docType + ']');
-  var url = 'http://' + instance['host'] + '/' + index;
-  resp = request('PUT', url, { headers: instance['header'], body: JSON.stringify(indexDefs[cdmVer][docType]) });
-  var data = JSON.parse(resp.getBody());
-  //TODO: catch error and return with error
-  debuglog('response:::\n' + JSON.stringify(data, null, 2));
-  if (!Object.keys(instance['indices']).includes(cdmVer)) {
-    instance['indices'][cdmVer] = [];
-  }
-  instance['indices'][cdmVer].push(index);
-  //TODO: query opensearch to verify index is present
-  var retMsg = 'INFO: Created index [' + index + ']';
+  retMsg = 'INFO: checkCreateIndex completed for ' + indices.length + ' index(es)';
   return createResponse(retCode, retMsg);
 };
 exports.checkCreateIndex = checkCreateIndex;
@@ -579,13 +584,15 @@ function getIndexName(docType, instance, yearDotMonth) {
   const baseName = getIndexBaseName(instance);
   cdmVer = getCdmVer(instance);
   if (cdmVer == 'v7dev' || cdmVer == 'v8dev') {
-    name = docType;
-  } else {
-    name = docType + yearDotMonth;
+    var fullName = baseName + docType;
+    checkCreateIndex(instance, fullName);
+    return fullName;
   }
-  fullName = baseName + name;
-  //debuglog('getIndexName() fullName: [' + fullName + ']');
-  // necessary?
+  // yearDotMonth may be comma-separated suffixes (e.g., "@2025.01,@2025.02").
+  // Expand each suffix into a full index name with baseName+docType.
+  var suffixes = yearDotMonth.split(',');
+  var names = suffixes.map(function (s) { return baseName + docType + s; });
+  var fullName = names.join(',');
   checkCreateIndex(instance, fullName);
   return fullName;
 }
@@ -728,7 +735,18 @@ esJsonArrRequest = async function (instance, docType, action, jsonArr, yearDotMo
     // Expect to have the Index and action in the jsonArr itself
     url = 'http://' + instance['host'] + '/_bulk';
   } else {
-    url = 'http://' + instance['host'] + '/' + getIndexName(docType, instance, yearDotMonth) + action;
+    var indexName = getIndexName(docType, instance, yearDotMonth);
+    if (indexName.includes(',')) {
+      // Multi-index: put index in each NDJSON header line instead of the URL
+      url = 'http://' + instance['host'] + action;
+      var indices = indexName.split(',');
+      var indexHeader = JSON.stringify({ index: indices });
+      for (var j = 0; j < jsonArr.length; j += 2) {
+        jsonArr[j] = indexHeader;
+      }
+    } else {
+      url = 'http://' + instance['host'] + '/' + indexName + action;
+    }
   }
   var max = 16384;
   var idx = 0;
@@ -1242,6 +1260,7 @@ mgetIterations = async function (instance, runIds, yearDotMonth) {
 
 // --------------------------------------------------------------------------------------------------------------
 getIterations = createGetFromMget(mgetIterations, 1);
+exports.mgetIterations = mgetIterations;
 exports.getIterations = getIterations;
 
 // --------------------------------------------------------------------------------------------------------------
@@ -1251,6 +1270,7 @@ mgetTags = async function (instance, runIds, yearDotMonth) {
 
 // --------------------------------------------------------------------------------------------------------------
 getTags = createGetFromMget(mgetTags, 1);
+exports.mgetTags = mgetTags;
 exports.getTags = getTags;
 
 // --------------------------------------------------------------------------------------------------------------
@@ -1401,8 +1421,10 @@ getAvailableMonths = function (instance) {
 exports.getAvailableMonths = getAvailableMonths;
 
 // Build a yearDotMonth pattern for a date range.
-// start/end are strings like "2025.01". Returns "@2025.01,<baseName><docType>@2025.02,..."
-// or "@*" if no range is specified.
+// start/end are strings like "2025.01". Returns comma-separated suffixes
+// like "@2025.01,@2025.02,@2025.03" or "@*" if no range is specified.
+// The docType parameter is accepted for backward compatibility but ignored —
+// getIndexName expands each suffix with the correct baseName+docType.
 buildYearDotMonthRange = function (instance, docType, start, end) {
   if (!start && !end) return '@*';
   var ver = getCdmVer(instance);
@@ -1422,15 +1444,9 @@ buildYearDotMonthRange = function (instance, docType, start, end) {
   // For a single month, just return @YYYY.MM
   if (filtered.length === 1) return '@' + filtered[0];
 
-  // For multiple months, build comma-separated full index names.
-  // The first entry is just @YYYY.MM (getIndexName prepends baseName+docType).
-  // Subsequent entries must be full index names since they go into the same URL.
-  var baseName = getIndexBaseName(instance);
-  var parts = ['@' + filtered[0]];
-  for (var i = 1; i < filtered.length; i++) {
-    parts.push(baseName + docType + '@' + filtered[i]);
-  }
-  return parts.join(',');
+  // For multiple months, return comma-separated suffixes.
+  // getIndexName will expand each one with baseName+docType.
+  return filtered.map(function (m) { return '@' + m; }).join(',');
 };
 exports.buildYearDotMonthRange = buildYearDotMonthRange;
 
@@ -1593,6 +1609,7 @@ mgetBenchmarkName = async function (instance, runIds, yearDotMonth) {
 
 // --------------------------------------------------------------------------------------------------------------
 getBenchmarkName = createGetFromMget(mgetBenchmarkName, 1, (r) => r[0][0]);
+exports.mgetBenchmarkName = mgetBenchmarkName;
 exports.getBenchmarkName = getBenchmarkName;
 
 // --------------------------------------------------------------------------------------------------------------

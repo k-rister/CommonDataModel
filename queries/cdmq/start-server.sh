@@ -32,7 +32,10 @@ npm install --no-fund --no-audit 2>&1 | tail -1 >&2
     #fi
 #fi
 
-node ./server.js "$@"
-rc=$?
-popd >/dev/null
-exit $rc
+while true; do
+    echo "Starting server.js..."
+    node ./server.js "$@"
+    rc=$?
+    echo "server.js exited with rc=$rc, restarting..."
+    sleep 1
+done

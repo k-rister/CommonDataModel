@@ -45,8 +45,8 @@ export async function searchRuns(filters = {}) {
   return request('GET', `/runs${qs ? '?' + qs : ''}`);
 }
 
-export async function getIterationDetails(runIds) {
-  return request('POST', '/iterations/details', { runIds });
+export async function getIterationDetails(runIds, start, end) {
+  return request('POST', '/iterations/details', { runIds, start, end });
 }
 
 export async function getFieldValues(fieldType, filterParams = {}) {

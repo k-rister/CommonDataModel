@@ -4,8 +4,8 @@ import { timeWork, addEntry } from '../debugLog';
 
 // Fetch fully hydrated iteration details for all runs in a single batch request.
 // The server handles all the mSearch batching internally.
-async function loadIterationsForRuns(runIds) {
-  const res = await api.getIterationDetails(runIds);
+async function loadIterationsForRuns(runIds, start, end) {
+  const res = await api.getIterationDetails(runIds, start, end);
   return res.iterations || [];
 }
 
@@ -146,7 +146,7 @@ export default function SearchPanel({ onResults, onError, loading, setLoading })
       addEntry({ type: 'info', label: `Found ${runIds.length} run(s), loading iterations`, status: 'done', elapsed: 0 });
 
       let iterations = await timeWork(`Load iteration details for ${runIds.length} run(s)`, () =>
-        loadIterationsForRuns(runIds),
+        loadIterationsForRuns(runIds, apiFilters.start, apiFilters.end),
       );
 
       // Params and primary-metric are per-iteration, so the server-side filter

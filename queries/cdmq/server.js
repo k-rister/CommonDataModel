@@ -657,7 +657,7 @@ app.post('/api/v1/run/:id/metric-types', resolveRun, async (req, res) => {
 // --------------------------------------------------------------------------------------------------------------
 app.post('/api/v1/iterations/details', async (req, res) => {
   try {
-    const { runIds } = req.body;
+    const { runIds, start, end } = req.body;
 
     if (!Array.isArray(runIds) || runIds.length === 0) {
       return res.status(400).json({
@@ -675,33 +675,15 @@ app.post('/api/v1/iterations/details', async (req, res) => {
 
     getInstancesInfo(instances);
 
-    // Group runs by instance and yearDotMonth
-    var runGroups = []; // [{ instance, yearDotMonth, runIds: [...] }]
-    for (const runId of runIds) {
-      var instance = await findInstanceFromRun(instances, runId);
-      if (instance == null) {
-        serverLog('iterations/details: skipping run ' + runId + ' (not found)');
-        continue;
-      }
-      var yearDotMonth = await findYearDotMonthFromRun(instance, runId);
-
-      // Try to find existing group for this instance+ydm
-      var group = runGroups.find(
-        (g) => g.instance.host === instance.host && g.yearDotMonth === yearDotMonth
-      );
-      if (!group) {
-        group = { instance, yearDotMonth, runIds: [] };
-        runGroups.push(group);
-      }
-      group.runIds.push(runId);
-    }
-
     var allIterations = [];
 
-    for (const group of runGroups) {
-      var inst = group.instance;
-      var ydm = group.yearDotMonth;
-      var gRunIds = group.runIds;
+    for (const inst of instances) {
+      if (invalidInstance(inst)) continue;
+      // Use the date range from the search to scope queries.
+      // buildYearDotMonthRange returns docType-independent suffixes (e.g., "@2025.01,@2025.02")
+      // so the same ydm works for all index types (run, iteration, param, etc.)
+      var ydm = cdm.buildYearDotMonthRange(inst, 'run', start || null, end || null);
+      var gRunIds = runIds;
 
       // Step 1: Batch-fetch run-level data for all runs in this group
       var [benchmarks, iterationsByRun, tagsByRun] = await Promise.all([
