@@ -1629,6 +1629,7 @@ mgetRunData = async function (instance, runIds, yearDotMonth) {
 
 // --------------------------------------------------------------------------------------------------------------
 getRunData = createGetFromMget(mgetRunData, 1);
+exports.mgetRunData = mgetRunData;
 exports.getRunData = getRunData;
 
 // --------------------------------------------------------------------------------------------------------------

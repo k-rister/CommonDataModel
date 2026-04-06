@@ -465,6 +465,11 @@ body {
   font-size: 12px;
 }
 
+.run-date {
+  white-space: nowrap;
+  font-size: 12px;
+}
+
 .metric-value {
   font-family: monospace;
   font-weight: 600;

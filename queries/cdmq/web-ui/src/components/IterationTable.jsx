@@ -1,5 +1,11 @@
 import { useState, useMemo } from 'react';
 
+function formatDate(ts) {
+  if (!ts) return '-';
+  var d = new Date(Number(ts));
+  return d.toLocaleDateString() + ' ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+
 function formatMetric(pm) {
   if (!pm) return '-';
   // pm is a string like "fio::iops" from the API
@@ -62,6 +68,10 @@ export default function IterationTable({ iterations, selected, onToggleSelect, o
           va = a.runId;
           vb = b.runId;
           break;
+        case 'date':
+          va = a.runBegin || 0;
+          vb = b.runBegin || 0;
+          break;
         default:
           return 0;
       }
@@ -122,6 +132,9 @@ export default function IterationTable({ iterations, selected, onToggleSelect, o
               <th className={thClass('run')} onClick={() => handleSort('run')}>
                 Run
               </th>
+              <th className={thClass('date')} onClick={() => handleSort('date')}>
+                Date
+              </th>
               <th className={thClass('benchmark')} onClick={() => handleSort('benchmark')}>
                 Benchmark
               </th>
@@ -141,21 +154,21 @@ export default function IterationTable({ iterations, selected, onToggleSelect, o
           <tbody>
             {loading && (
               <tr className="loading-row">
-                <td colSpan={8}>
+                <td colSpan={9}>
                   <span className="spinner" /> Loading iterations...
                 </td>
               </tr>
             )}
             {!loading && sorted.length === 0 && iterations.length === 0 && (
               <tr className="loading-row">
-                <td colSpan={8}>
+                <td colSpan={9}>
                   <span className="empty-msg">Search for runs to see iterations.</span>
                 </td>
               </tr>
             )}
             {!loading && sorted.length === 0 && iterations.length > 0 && (
               <tr className="loading-row">
-                <td colSpan={8}>
+                <td colSpan={9}>
                   <span className="empty-msg">No iterations match the current filter.</span>
                 </td>
               </tr>
@@ -183,6 +196,7 @@ export default function IterationTable({ iterations, selected, onToggleSelect, o
                   <td>
                     <span className="run-id">{it.runId}</span>
                   </td>
+                  <td className="run-date">{formatDate(it.runBegin)}</td>
                   <td>{it.benchmark || '-'}</td>
                   <td>
                     {(it.tags || []).map((t, i) => (

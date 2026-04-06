@@ -689,19 +689,22 @@ app.post('/api/v1/iterations/details', async (req, res) => {
       // Run sequentially to avoid overwhelming OpenSearch's search thread pool
       // when querying across many monthly indices.
       var benchmarks = await cdm.mgetBenchmarkName(inst, gRunIds, ydm);
+      var runDataByRun = await cdm.mgetRunData(inst, gRunIds, ydm);
       var iterationsByRun = await cdm.mgetIterations(inst, gRunIds, ydm);
       var tagsByRun = await cdm.mgetTags(inst, gRunIds, ydm);
 
       // Collect all iteration IDs across all runs, tracking which run each belongs to
       var allIterIds = [];
-      var iterToRunMap = []; // parallel array: iterToRunMap[i] = { runIdx, runId, benchmark, tags }
+      var iterToRunMap = []; // parallel array: iterToRunMap[i] = { runIdx, runId, benchmark, tags, runBegin }
       for (var r = 0; r < gRunIds.length; r++) {
         var runIters = (iterationsByRun && iterationsByRun[r]) || [];
         var benchmark = (benchmarks && benchmarks[r] && benchmarks[r][0]) || null;
         var tags = (tagsByRun && tagsByRun[r]) || [];
+        var runData = (runDataByRun && runDataByRun[r] && runDataByRun[r][0]) || {};
+        var runBegin = (runData.run && runData.run.begin) || null;
         for (var it = 0; it < runIters.length; it++) {
           allIterIds.push(runIters[it]);
-          iterToRunMap.push({ runIdx: r, runId: gRunIds[r], benchmark, tags });
+          iterToRunMap.push({ runIdx: r, runId: gRunIds[r], benchmark, tags, runBegin });
         }
       }
 
@@ -793,7 +796,8 @@ app.post('/api/v1/iterations/details', async (req, res) => {
           sampleCount: iterSamples.length,
           passCount: passCount,
           failCount: failCount,
-          primaryMetric: (primaryMetrics && primaryMetrics[i]) || null
+          primaryMetric: (primaryMetrics && primaryMetrics[i]) || null,
+          runBegin: meta.runBegin
         });
       }
     }
