@@ -308,6 +308,19 @@ body {
   vertical-align: top;
 }
 
+/* Run group striping — alternate background by run ID */
+.results-table tr.run-group-even {
+  background: var(--surface);
+}
+
+.results-table tr.run-group-odd {
+  background: #f8f9fb;
+}
+
+.results-table tr.run-group-border td {
+  border-top: 2px solid #b0b8c4;
+}
+
 .results-table tr:hover {
   background: var(--accent-light);
 }
@@ -455,10 +468,6 @@ body {
 .metric-value {
   font-family: monospace;
   font-weight: 600;
-}
-
-.uuid-short {
-  cursor: help;
 }
 
 /* Debug Console */

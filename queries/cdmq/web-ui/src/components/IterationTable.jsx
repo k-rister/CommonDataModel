@@ -1,10 +1,5 @@
 import { useState, useMemo } from 'react';
 
-function shortId(uuid) {
-  if (!uuid) return '';
-  return uuid.substring(0, 8);
-}
-
 function formatMetric(pm) {
   if (!pm) return '-';
   // pm is a string like "fio::iops" from the API
@@ -84,6 +79,17 @@ export default function IterationTable({ iterations, selected, onToggleSelect, o
 
   const allOnPageSelected = sorted.length > 0 && sorted.every((it) => selected.has(it.iterationId));
 
+  // Precompute run group parity for each row (0 or 1, toggling when runId changes)
+  const runGroupParity = useMemo(() => {
+    var parity = [];
+    var current = 0;
+    for (var i = 0; i < sorted.length; i++) {
+      if (i > 0 && sorted[i].runId !== sorted[i - 1].runId) current = 1 - current;
+      parity.push(current);
+    }
+    return parity;
+  }, [sorted]);
+
   return (
     <div className="results-panel">
       <div className="results-header">
@@ -155,10 +161,15 @@ export default function IterationTable({ iterations, selected, onToggleSelect, o
               </tr>
             )}
             {!loading &&
-              sorted.map((it) => (
+              sorted.map((it, idx) => {
+                var rowClasses = [];
+                if (selected.has(it.iterationId)) rowClasses.push('selected');
+                rowClasses.push(runGroupParity[idx] === 0 ? 'run-group-even' : 'run-group-odd');
+                if (idx > 0 && it.runId !== sorted[idx - 1].runId) rowClasses.push('run-group-border');
+                return (
                 <tr
                   key={it.iterationId}
-                  className={selected.has(it.iterationId) ? 'selected' : ''}
+                  className={rowClasses.join(' ')}
                   onClick={() => onToggleSelect(it)}
                   style={{ cursor: 'pointer' }}
                 >
@@ -170,9 +181,7 @@ export default function IterationTable({ iterations, selected, onToggleSelect, o
                     />
                   </td>
                   <td>
-                    <span className="uuid-short run-id" title={it.runId}>
-                      {shortId(it.runId)}
-                    </span>
+                    <span className="run-id">{it.runId}</span>
                   </td>
                   <td>{it.benchmark || '-'}</td>
                   <td>
@@ -205,7 +214,8 @@ export default function IterationTable({ iterations, selected, onToggleSelect, o
                     {it.passCount === 0 && it.failCount === 0 && '-'}
                   </td>
                 </tr>
-              ))}
+                );
+              })}
           </tbody>
         </table>
       </div>
