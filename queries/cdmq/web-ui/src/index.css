@@ -484,6 +484,65 @@ a.run-id:hover {
   font-weight: 600;
 }
 
+/* Autocomplete dropdown */
+.autocomplete-wrapper {
+  position: relative;
+}
+
+.autocomplete-wrapper input {
+  width: 100%;
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 13px;
+  outline: none;
+  transition: border-color 0.15s;
+}
+
+.autocomplete-wrapper input:focus {
+  border-color: var(--accent);
+}
+
+.autocomplete-dropdown {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  z-index: 100;
+  background: var(--surface);
+  border: 1px solid var(--accent);
+  border-top: none;
+  border-radius: 0 0 var(--radius) var(--radius);
+  max-height: 200px;
+  overflow-y: auto;
+  box-shadow: var(--shadow);
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.autocomplete-dropdown li {
+  padding: 6px 10px;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.autocomplete-dropdown li:hover,
+.autocomplete-dropdown li.highlighted {
+  background: var(--accent-light);
+}
+
+.autocomplete-dropdown li.absent {
+  color: #aaa;
+}
+
+.autocomplete-dropdown li.section-divider {
+  padding: 0;
+  margin: 2px 0;
+  border-top: 1px solid var(--border);
+  cursor: default;
+}
+
 /* Debug Console */
 .debug-console {
   position: fixed;

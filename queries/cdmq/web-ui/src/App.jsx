@@ -95,7 +95,7 @@ export default function App() {
 
       {view === 'search' && (
         <>
-          <SearchPanel onResults={handleSearchResults} onError={setError} loading={loading} setLoading={setLoading} />
+          <SearchPanel iterations={iterations} onResults={handleSearchResults} onError={setError} loading={loading} setLoading={setLoading} />
 
           {selected.size > 0 && (
             <SelectionBar selected={selected} onRemove={removeSelected} onClear={clearSelected} />

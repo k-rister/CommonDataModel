@@ -1,6 +1,7 @@
-import { useState, useCallback, useRef } from 'react';
+import { useState, useCallback, useRef, useMemo } from 'react';
 import * as api from '../api/cdm';
 import { timeWork, addEntry } from '../debugLog';
+import AutocompleteInput from './AutocompleteInput';
 
 // Fetch fully hydrated iteration details for all runs in a single batch request.
 // The server handles all the mSearch batching internally.
@@ -21,7 +22,33 @@ function defaultEnd() {
   return d.getFullYear() + '.' + String(d.getMonth() + 1).padStart(2, '0');
 }
 
-export default function SearchPanel({ onResults, onError, loading, setLoading }) {
+export default function SearchPanel({ iterations, onResults, onError, loading, setLoading }) {
+  const presentValues = useMemo(() => {
+    var benchmarks = new Set();
+    var primaryMetrics = new Set();
+    var tagNames = new Set();
+    var tagValues = {};
+    var paramArgs = new Set();
+    var paramValues = {};
+    if (iterations && iterations.length > 0) {
+      for (var it of iterations) {
+        if (it.benchmark) benchmarks.add(it.benchmark);
+        if (it.primaryMetric) primaryMetrics.add(it.primaryMetric);
+        for (var t of (it.tags || [])) {
+          tagNames.add(t.name);
+          if (!tagValues[t.name]) tagValues[t.name] = new Set();
+          tagValues[t.name].add(t.val);
+        }
+        for (var p of (it.params || [])) {
+          paramArgs.add(p.arg);
+          if (!paramValues[p.arg]) paramValues[p.arg] = new Set();
+          paramValues[p.arg].add(String(p.val));
+        }
+      }
+    }
+    return { benchmarks, primaryMetrics, tagNames, tagValues, paramArgs, paramValues };
+  }, [iterations]);
+
   const [filters, setFilters] = useState({
     name: '',
     email: '',
@@ -208,35 +235,27 @@ export default function SearchPanel({ onResults, onError, loading, setLoading })
         </div>
         <div className="field">
           <label>Benchmark</label>
-          <input
-            list="dl-benchmarks"
-            placeholder="e.g. fio, uperf"
+          <AutocompleteInput
             value={filters.benchmark}
-            onChange={(e) => updateFilter('benchmark', e.target.value)}
+            onChange={(v) => updateFilter('benchmark', v)}
+            options={options.benchmarks || []}
+            presentValues={presentValues.benchmarks}
+            placeholder="e.g. fio, uperf"
             onFocus={() => loadOptions('benchmarks', 'benchmarks')}
             onKeyDown={handleKeyDown}
           />
-          <datalist id="dl-benchmarks">
-            {(options.benchmarks || []).map((v) => (
-              <option key={v} value={v} />
-            ))}
-          </datalist>
         </div>
         <div className="field">
           <label>Primary Metric</label>
-          <input
-            list="dl-primary-metrics"
-            placeholder="e.g. uperf::Gbps"
+          <AutocompleteInput
             value={filters.primaryMetric}
-            onChange={(e) => updateFilter('primaryMetric', e.target.value)}
+            onChange={(v) => updateFilter('primaryMetric', v)}
+            options={options.primaryMetrics || []}
+            presentValues={presentValues.primaryMetrics}
+            placeholder="e.g. uperf::Gbps"
             onFocus={() => loadOptions('primaryMetrics', 'primary-metrics')}
             onKeyDown={handleKeyDown}
           />
-          <datalist id="dl-primary-metrics">
-            {(options.primaryMetrics || []).map((v) => (
-              <option key={v} value={v} />
-            ))}
-          </datalist>
         </div>
         <div className="field">
           <label>Run Name</label>
@@ -260,35 +279,27 @@ export default function SearchPanel({ onResults, onError, loading, setLoading })
         </div>
         <div className="field">
           <label>From (YYYY.MM)</label>
-          <input
-            list="dl-months-start"
-            placeholder="e.g. 2025.01"
+          <AutocompleteInput
             value={filters.start}
-            onChange={(e) => updateFilter('start', e.target.value)}
+            onChange={(v) => updateFilter('start', v)}
+            options={options.months || []}
+            presentValues={new Set()}
+            placeholder="e.g. 2025.01"
             onFocus={() => loadOptions('months', 'months')}
             onKeyDown={handleKeyDown}
           />
-          <datalist id="dl-months-start">
-            {(options.months || []).map((v) => (
-              <option key={v} value={v} />
-            ))}
-          </datalist>
         </div>
         <div className="field">
           <label>To (YYYY.MM)</label>
-          <input
-            list="dl-months-end"
-            placeholder="e.g. 2025.04"
+          <AutocompleteInput
             value={filters.end}
-            onChange={(e) => updateFilter('end', e.target.value)}
+            onChange={(v) => updateFilter('end', v)}
+            options={options.months || []}
+            presentValues={new Set()}
+            placeholder="e.g. 2025.04"
             onFocus={() => loadOptions('months', 'months')}
             onKeyDown={handleKeyDown}
           />
-          <datalist id="dl-months-end">
-            {(options.months || []).map((v) => (
-              <option key={v} value={v} />
-            ))}
-          </datalist>
         </div>
       </div>
 
@@ -302,30 +313,27 @@ export default function SearchPanel({ onResults, onError, loading, setLoading })
         </div>
         {filters.tags.map((tag, i) => (
           <div key={i} className="filter-row">
-            <input
-              list={`dl-tag-names-${i}`}
-              placeholder="Tag name"
+            <AutocompleteInput
               value={tag.name}
-              onChange={(e) => {
-                updateTagFilter(i, 'name', e.target.value);
-                if (e.target.value) {
-                  const cacheKey = 'tagValues_' + e.target.value;
-                  loadOptions(cacheKey, 'tag-values', { name: e.target.value });
+              onChange={(v) => {
+                updateTagFilter(i, 'name', v);
+                if (v) {
+                  const cacheKey = 'tagValues_' + v;
+                  loadOptions(cacheKey, 'tag-values', { name: v });
                 }
               }}
+              options={options.tagNames || []}
+              presentValues={presentValues.tagNames}
+              placeholder="Tag name"
               onFocus={() => loadOptions('tagNames', 'tag-names')}
               onKeyDown={handleKeyDown}
             />
-            <datalist id={`dl-tag-names-${i}`}>
-              {(options.tagNames || []).map((v) => (
-                <option key={v} value={v} />
-              ))}
-            </datalist>
-            <input
-              list={`dl-tag-values-${i}`}
-              placeholder="Tag value"
+            <AutocompleteInput
               value={tag.val}
-              onChange={(e) => updateTagFilter(i, 'val', e.target.value)}
+              onChange={(v) => updateTagFilter(i, 'val', v)}
+              options={options.tagValues['tagValues_' + tag.name] || []}
+              presentValues={presentValues.tagValues[tag.name] || new Set()}
+              placeholder="Tag value"
               onFocus={() => {
                 if (tag.name) {
                   const cacheKey = 'tagValues_' + tag.name;
@@ -334,11 +342,6 @@ export default function SearchPanel({ onResults, onError, loading, setLoading })
               }}
               onKeyDown={handleKeyDown}
             />
-            <datalist id={`dl-tag-values-${i}`}>
-              {(options.tagValues['tagValues_' + tag.name] || []).map((v) => (
-                <option key={v} value={v} />
-              ))}
-            </datalist>
             <button className="btn btn-sm filter-remove-btn" onClick={() => removeTagFilter(i)} title="Remove">
               x
             </button>
@@ -356,24 +359,21 @@ export default function SearchPanel({ onResults, onError, loading, setLoading })
         </div>
         {filters.params.map((param, i) => (
           <div key={i} className="filter-row">
-            <input
-              list={`dl-param-args-${i}`}
-              placeholder="Param name"
+            <AutocompleteInput
               value={param.arg}
-              onChange={(e) => updateParamFilter(i, 'arg', e.target.value)}
+              onChange={(v) => updateParamFilter(i, 'arg', v)}
+              options={options.paramArgs || []}
+              presentValues={presentValues.paramArgs}
+              placeholder="Param name"
               onFocus={() => loadOptions('paramArgs', 'param-args')}
               onKeyDown={handleKeyDown}
             />
-            <datalist id={`dl-param-args-${i}`}>
-              {(options.paramArgs || []).map((v) => (
-                <option key={v} value={v} />
-              ))}
-            </datalist>
-            <input
-              list={`dl-param-values-${i}`}
-              placeholder="Param value"
+            <AutocompleteInput
               value={param.val}
-              onChange={(e) => updateParamFilter(i, 'val', e.target.value)}
+              onChange={(v) => updateParamFilter(i, 'val', v)}
+              options={options.paramValues['paramValues_' + param.arg] || []}
+              presentValues={presentValues.paramValues[param.arg] || new Set()}
+              placeholder="Param value"
               onFocus={() => {
                 if (param.arg) {
                   const cacheKey = 'paramValues_' + param.arg;
@@ -382,11 +382,6 @@ export default function SearchPanel({ onResults, onError, loading, setLoading })
               }}
               onKeyDown={handleKeyDown}
             />
-            <datalist id={`dl-param-values-${i}`}>
-              {(options.paramValues['paramValues_' + param.arg] || []).map((v) => (
-                <option key={v} value={v} />
-              ))}
-            </datalist>
             <button className="btn btn-sm filter-remove-btn" onClick={() => removeParamFilter(i)} title="Remove">
               x
             </button>
