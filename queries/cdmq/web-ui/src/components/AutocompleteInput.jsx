@@ -1,10 +1,17 @@
 import { useState, useRef, useEffect, useMemo } from 'react';
 
-export default function AutocompleteInput({ value, onChange, options, presentValues, placeholder, onFocus, onKeyDown }) {
+// When multi=true, value is a comma-separated string of selected values.
+// The component renders chips for each selected value and a text input for filtering.
+export default function AutocompleteInput({ value, onChange, options, presentValues, placeholder, onFocus, onKeyDown, multi }) {
   const [open, setOpen] = useState(false);
   const [highlight, setHighlight] = useState(-1);
+  const [inputText, setInputText] = useState('');
   const wrapperRef = useRef(null);
   const inputRef = useRef(null);
+
+  // Parse multi-value string into array
+  var selected = multi && value ? value.split(',').filter(Boolean) : [];
+  var selectedSet = new Set(selected);
 
   // Close on outside click
   useEffect(() => {
@@ -18,10 +25,15 @@ export default function AutocompleteInput({ value, onChange, options, presentVal
   }, []);
 
   // Filter and partition options
+  var filterText = multi ? inputText : (value || '');
   const { present, absent } = useMemo(() => {
     var all = options || [];
-    var q = (value || '').toLowerCase();
+    var q = filterText.toLowerCase();
     var filtered = q ? all.filter((o) => String(o).toLowerCase().includes(q)) : all;
+    // In multi mode, hide already-selected values from the dropdown
+    if (multi) {
+      filtered = filtered.filter((o) => !selectedSet.has(String(o)));
+    }
     if (!presentValues || presentValues.size === 0) {
       return { present: filtered, absent: [] };
     }
@@ -35,7 +47,7 @@ export default function AutocompleteInput({ value, onChange, options, presentVal
       }
     }
     return { present: p, absent: a };
-  }, [options, value, presentValues]);
+  }, [options, filterText, presentValues, multi ? value : null]);
 
   var items = present.concat(absent);
 
@@ -45,18 +57,41 @@ export default function AutocompleteInput({ value, onChange, options, presentVal
   }
 
   function handleChange(e) {
-    onChange(e.target.value);
+    if (multi) {
+      setInputText(e.target.value);
+    } else {
+      onChange(e.target.value);
+    }
     setOpen(true);
     setHighlight(-1);
   }
 
   function selectItem(val) {
-    onChange(val);
-    setOpen(false);
-    setHighlight(-1);
+    if (multi) {
+      var next = [...selected, String(val)];
+      onChange(next.join(','));
+      setInputText('');
+      setHighlight(-1);
+      // Keep dropdown open for more selections
+      if (inputRef.current) inputRef.current.focus();
+    } else {
+      onChange(val);
+      setOpen(false);
+      setHighlight(-1);
+    }
+  }
+
+  function removeChip(val) {
+    var next = selected.filter((s) => s !== val);
+    onChange(next.join(','));
   }
 
   function handleKeyDownInternal(e) {
+    if (multi && e.key === 'Backspace' && inputText === '' && selected.length > 0) {
+      // Remove last chip on backspace in empty input
+      removeChip(selected[selected.length - 1]);
+      return;
+    }
     if (!open || items.length === 0) {
       if (onKeyDown) onKeyDown(e);
       return;
@@ -80,15 +115,35 @@ export default function AutocompleteInput({ value, onChange, options, presentVal
 
   return (
     <div className="autocomplete-wrapper" ref={wrapperRef}>
-      <input
-        ref={inputRef}
-        type="text"
-        value={value}
-        placeholder={placeholder}
-        onChange={handleChange}
-        onFocus={handleFocus}
-        onKeyDown={handleKeyDownInternal}
-      />
+      {multi ? (
+        <div className="autocomplete-multi-input" onClick={() => inputRef.current && inputRef.current.focus()}>
+          {selected.map((s) => (
+            <span key={s} className="autocomplete-chip">
+              {s}
+              <button type="button" onMouseDown={(e) => { e.stopPropagation(); removeChip(s); }}>&times;</button>
+            </span>
+          ))}
+          <input
+            ref={inputRef}
+            type="text"
+            value={inputText}
+            placeholder={selected.length === 0 ? placeholder : ''}
+            onChange={handleChange}
+            onFocus={handleFocus}
+            onKeyDown={handleKeyDownInternal}
+          />
+        </div>
+      ) : (
+        <input
+          ref={inputRef}
+          type="text"
+          value={value}
+          placeholder={placeholder}
+          onChange={handleChange}
+          onFocus={handleFocus}
+          onKeyDown={handleKeyDownInternal}
+        />
+      )}
       {open && items.length > 0 && (
         <ul className="autocomplete-dropdown">
           {present.map((item, i) => (

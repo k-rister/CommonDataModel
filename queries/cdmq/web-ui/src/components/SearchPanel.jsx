@@ -187,7 +187,11 @@ export default function SearchPanel({ iterations, onResults, onError, loading, s
       const beforeFilter = iterations.length;
       if (activeParams.length > 0) {
         iterations = iterations.filter((it) =>
-          activeParams.every((fp) => it.params.some((p) => p.arg === fp.arg && p.val === fp.val)),
+          activeParams.every((fp) => {
+            // Support comma-separated values (OR within a param, AND across params)
+            var vals = fp.val.split(',').filter(Boolean);
+            return it.params.some((p) => p.arg === fp.arg && vals.includes(String(p.val)));
+          }),
         );
       }
       if (apiFilters.primaryMetric) {
@@ -351,6 +355,7 @@ export default function SearchPanel({ iterations, onResults, onError, loading, s
                 }
               }}
               onKeyDown={handleKeyDown}
+              multi
             />
             <button className="btn btn-sm filter-remove-btn" onClick={() => removeTagFilter(i)} title="Remove">
               x
@@ -391,6 +396,7 @@ export default function SearchPanel({ iterations, onResults, onError, loading, s
                 }
               }}
               onKeyDown={handleKeyDown}
+              multi
             />
             <button className="btn btn-sm filter-remove-btn" onClick={() => removeParamFilter(i)} title="Remove">
               x

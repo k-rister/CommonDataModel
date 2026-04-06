@@ -229,15 +229,29 @@ app.get('/api/v1/runs', async (req, res) => {
       );
     }
 
-    // Filter by param pairs: params=[{"arg":"x","val":"y"}, ...]
+    // Filter by param pairs: params=[{"arg":"x","val":"y,z"}, ...]
+    // Comma-separated values are OR'd (union), then intersected with the run set.
     if (req.query.params) {
       try {
         var paramFilters = JSON.parse(req.query.params);
         for (const param of paramFilters) {
           if (!param.arg || !param.val) continue;
-          runIds = await intersectRunIds(runIds, (inst) =>
-            cdm.getRunIdsByParam(inst, getYdm(inst, 'param', req), param.arg, param.val)
-          );
+          var vals = param.val.split(',').filter(Boolean);
+          if (vals.length === 1) {
+            runIds = await intersectRunIds(runIds, (inst) =>
+              cdm.getRunIdsByParam(inst, getYdm(inst, 'param', req), param.arg, vals[0])
+            );
+          } else {
+            // Union run IDs across all values for this param
+            var unionIds = new Set();
+            for (const val of vals) {
+              var ids = await intersectRunIds(runIds, (inst) =>
+                cdm.getRunIdsByParam(inst, getYdm(inst, 'param', req), param.arg, val)
+              );
+              ids.forEach((id) => unionIds.add(id));
+            }
+            runIds = runIds.filter((id) => unionIds.has(id));
+          }
         }
       } catch (e) {
         /* ignore parse errors */
