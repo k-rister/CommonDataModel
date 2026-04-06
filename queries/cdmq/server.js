@@ -702,9 +702,10 @@ app.post('/api/v1/iterations/details', async (req, res) => {
         var tags = (tagsByRun && tagsByRun[r]) || [];
         var runData = (runDataByRun && runDataByRun[r] && runDataByRun[r][0]) || {};
         var runBegin = (runData.run && runData.run.begin) || null;
+        var runSource = (runData.run && runData.run.source) || null;
         for (var it = 0; it < runIters.length; it++) {
           allIterIds.push(runIters[it]);
-          iterToRunMap.push({ runIdx: r, runId: gRunIds[r], benchmark, tags, runBegin });
+          iterToRunMap.push({ runIdx: r, runId: gRunIds[r], benchmark, tags, runBegin, runSource });
         }
       }
 
@@ -797,7 +798,8 @@ app.post('/api/v1/iterations/details', async (req, res) => {
           passCount: passCount,
           failCount: failCount,
           primaryMetric: (primaryMetrics && primaryMetrics[i]) || null,
-          runBegin: meta.runBegin
+          runBegin: meta.runBegin,
+          runSource: meta.runSource
         });
       }
     }

@@ -465,6 +465,15 @@ body {
   font-size: 12px;
 }
 
+a.run-id {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+a.run-id:hover {
+  text-decoration: underline;
+}
+
 .run-date {
   white-space: nowrap;
   font-size: 12px;

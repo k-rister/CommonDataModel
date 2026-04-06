@@ -1,5 +1,17 @@
 import { useState, useMemo } from 'react';
 
+function buildRunUrl(source) {
+  if (!source) return null;
+  // source format: "hostname//var/lib/crucible/run/<run-dir>"
+  // splitting on "//" gives ["hostname", "var/lib/crucible/run/<run-dir>"]
+  var parts = source.split('//');
+  if (parts.length < 2) return null;
+  var host = parts[0];
+  var path = '/' + parts.slice(1).join('//');
+  var runPath = path.replace(/^\/var\/lib\/crucible\/run\//, '/run/');
+  return 'http://' + host + ':8080' + runPath;
+}
+
 function formatDate(ts) {
   if (!ts) return '-';
   var d = new Date(Number(ts));
@@ -194,7 +206,11 @@ export default function IterationTable({ iterations, selected, onToggleSelect, o
                     />
                   </td>
                   <td>
-                    <span className="run-id">{it.runId}</span>
+                    {buildRunUrl(it.runSource) ? (
+                      <a className="run-id" href={buildRunUrl(it.runSource)} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()}>{it.runId}</a>
+                    ) : (
+                      <span className="run-id">{it.runId}</span>
+                    )}
                   </td>
                   <td className="run-date">{formatDate(it.runBegin)}</td>
                   <td>{it.benchmark || '-'}</td>
