@@ -1465,6 +1465,18 @@ exports.buildYearDotMonthRange = buildYearDotMonthRange;
 // These use aggregations to return unique values from OpenSearch indices.
 // --------------------------------------------------------------------------------------------------------------
 
+getDistinctNames = async function (instance, yearDotMonth) {
+  return await mSearch(instance, 'run', yearDotMonth, [], [], null, { source: { terms: { field: 'run.name', size: 10000 } } }, 0);
+};
+exports.getDistinctNames = getDistinctNames;
+
+// --------------------------------------------------------------------------------------------------------------
+getDistinctEmails = async function (instance, yearDotMonth) {
+  return await mSearch(instance, 'run', yearDotMonth, [], [], null, { source: { terms: { field: 'run.email', size: 10000 } } }, 0);
+};
+exports.getDistinctEmails = getDistinctEmails;
+
+// --------------------------------------------------------------------------------------------------------------
 getDistinctBenchmarks = async function (instance, yearDotMonth) {
   return await mSearch(instance, 'run', yearDotMonth, [], [], null, { source: { terms: { field: 'run.benchmark', size: 10000 } } }, 0);
 };

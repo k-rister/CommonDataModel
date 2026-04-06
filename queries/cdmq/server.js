@@ -703,9 +703,11 @@ app.post('/api/v1/iterations/details', async (req, res) => {
         var runData = (runDataByRun && runDataByRun[r] && runDataByRun[r][0]) || {};
         var runBegin = (runData.run && runData.run.begin) || null;
         var runSource = (runData.run && runData.run.source) || null;
+        var runName = (runData.run && runData.run.name) || null;
+        var runEmail = (runData.run && runData.run.email) || null;
         for (var it = 0; it < runIters.length; it++) {
           allIterIds.push(runIters[it]);
-          iterToRunMap.push({ runIdx: r, runId: gRunIds[r], benchmark, tags, runBegin, runSource });
+          iterToRunMap.push({ runIdx: r, runId: gRunIds[r], benchmark, tags, runBegin, runSource, runName, runEmail });
         }
       }
 
@@ -799,7 +801,9 @@ app.post('/api/v1/iterations/details', async (req, res) => {
           failCount: failCount,
           primaryMetric: (primaryMetrics && primaryMetrics[i]) || null,
           runBegin: meta.runBegin,
-          runSource: meta.runSource
+          runSource: meta.runSource,
+          runName: meta.runName,
+          runEmail: meta.runEmail
         });
       }
     }
@@ -861,6 +865,32 @@ app.get('/api/v1/fields/months', async (req, res) => {
   } catch (error) {
     serverError('Error in GET /api/v1/fields/months: ' + error);
     res.status(500).json({ code: 'INTERNAL_ERROR', error: 'Failed to get months: ' + error.message });
+  }
+});
+
+app.get('/api/v1/fields/names', async (req, res) => {
+  try {
+    var values = await getDistinctValues(instances, (inst) =>
+      cdm.getDistinctNames(inst, getYdm(inst, 'run', req))
+    );
+    serverLog('GET /api/v1/fields/names returned ' + values.length + ' value(s)');
+    res.json({ values: values });
+  } catch (error) {
+    serverError('Error in GET /api/v1/fields/names: ' + error);
+    res.status(500).json({ code: 'INTERNAL_ERROR', error: 'Failed to get names: ' + error.message });
+  }
+});
+
+app.get('/api/v1/fields/emails', async (req, res) => {
+  try {
+    var values = await getDistinctValues(instances, (inst) =>
+      cdm.getDistinctEmails(inst, getYdm(inst, 'run', req))
+    );
+    serverLog('GET /api/v1/fields/emails returned ' + values.length + ' value(s)');
+    res.json({ values: values });
+  } catch (error) {
+    serverError('Error in GET /api/v1/fields/emails: ' + error);
+    res.status(500).json({ code: 'INTERNAL_ERROR', error: 'Failed to get emails: ' + error.message });
   }
 });
 

@@ -26,6 +26,8 @@ export default function SearchPanel({ iterations, onResults, onError, loading, s
   const presentValues = useMemo(() => {
     var benchmarks = new Set();
     var primaryMetrics = new Set();
+    var names = new Set();
+    var emails = new Set();
     var tagNames = new Set();
     var tagValues = {};
     var paramArgs = new Set();
@@ -34,6 +36,8 @@ export default function SearchPanel({ iterations, onResults, onError, loading, s
       for (var it of iterations) {
         if (it.benchmark) benchmarks.add(it.benchmark);
         if (it.primaryMetric) primaryMetrics.add(it.primaryMetric);
+        if (it.runName) names.add(it.runName);
+        if (it.runEmail) emails.add(it.runEmail);
         for (var t of (it.tags || [])) {
           tagNames.add(t.name);
           if (!tagValues[t.name]) tagValues[t.name] = new Set();
@@ -46,7 +50,7 @@ export default function SearchPanel({ iterations, onResults, onError, loading, s
         }
       }
     }
-    return { benchmarks, primaryMetrics, tagNames, tagValues, paramArgs, paramValues };
+    return { benchmarks, primaryMetrics, names, emails, tagNames, tagValues, paramArgs, paramValues };
   }, [iterations]);
 
   const [filters, setFilters] = useState({
@@ -66,6 +70,8 @@ export default function SearchPanel({ iterations, onResults, onError, loading, s
   const [options, setOptions] = useState({
     months: null,
     benchmarks: null,
+    names: null,
+    emails: null,
     tagNames: null,
     tagValues: {},
     paramArgs: null,
@@ -258,22 +264,26 @@ export default function SearchPanel({ iterations, onResults, onError, loading, s
           />
         </div>
         <div className="field">
-          <label>Run Name</label>
-          <input
-            type="text"
-            placeholder="Run name"
+          <label>User Name</label>
+          <AutocompleteInput
             value={filters.name}
-            onChange={(e) => updateFilter('name', e.target.value)}
+            onChange={(v) => updateFilter('name', v)}
+            options={options.names || []}
+            presentValues={presentValues.names}
+            placeholder="e.g. John Smith"
+            onFocus={() => loadOptions('names', 'names')}
             onKeyDown={handleKeyDown}
           />
         </div>
         <div className="field">
           <label>Email</label>
-          <input
-            type="text"
-            placeholder="user@example.com"
+          <AutocompleteInput
             value={filters.email}
-            onChange={(e) => updateFilter('email', e.target.value)}
+            onChange={(v) => updateFilter('email', v)}
+            options={options.emails || []}
+            presentValues={presentValues.emails}
+            placeholder="user@example.com"
+            onFocus={() => loadOptions('emails', 'emails')}
             onKeyDown={handleKeyDown}
           />
         </div>
