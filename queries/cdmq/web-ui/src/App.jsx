@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import SearchPanel from './components/SearchPanel';
 import SelectionBar from './components/SelectionBar';
 import IterationTable from './components/IterationTable';
@@ -6,6 +6,12 @@ import DebugConsole from './components/DebugConsole';
 import './index.css';
 
 export default function App() {
+  const [theme, setTheme] = useState(() => localStorage.getItem('theme') || 'dark');
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', theme);
+    localStorage.setItem('theme', theme);
+  }, [theme]);
+
   const [iterations, setIterations] = useState([]);
   const [selected, setSelected] = useState(new Map()); // iterationId -> iteration object
   const [loading, setLoading] = useState(false);
@@ -63,6 +69,10 @@ export default function App() {
     <div className="app">
       <header className="app-header">
         <h1>Crucible</h1>
+        <div className="app-header-right">
+        <button className="btn btn-sm btn-secondary theme-toggle" onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}>
+          {theme === 'dark' ? 'Light' : 'Dark'}
+        </button>
         <nav className="app-nav">
           <button className={view === 'search' ? 'active' : ''} onClick={() => setView('search')}>
             Search
@@ -82,6 +92,7 @@ export default function App() {
             Deep Dive
           </button>
         </nav>
+        </div>
       </header>
 
       {error && (
