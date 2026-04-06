@@ -731,6 +731,7 @@ esJsonArrRequest = async function (instance, docType, action, jsonArr, yearDotMo
 
   var thisJson = '';
   var url = '';
+  var numIndices = 1;
   if (docType == '') {
     // Expect to have the Index and action in the jsonArr itself
     url = 'http://' + instance['host'] + '/_bulk';
@@ -740,6 +741,7 @@ esJsonArrRequest = async function (instance, docType, action, jsonArr, yearDotMo
       // Multi-index: put index in each NDJSON header line instead of the URL
       url = 'http://' + instance['host'] + action;
       var indices = indexName.split(',');
+      numIndices = indices.length;
       var indexHeader = JSON.stringify({ index: indices });
       for (var j = 0; j < jsonArr.length; j += 2) {
         jsonArr[j] = indexHeader;
@@ -793,7 +795,11 @@ esJsonArrRequest = async function (instance, docType, action, jsonArr, yearDotMo
     }
 
     debuglog('esJsonArrRequest reqs.length:\n' + reqs.length);
-    var responses = await fetchBatchedData(instance, reqs);
+    // Scale down fetch concurrency for multi-index queries to avoid
+    // overwhelming OpenSearch's search thread pool queue (capacity ~1000).
+    // Each concurrent batch generates numIndices * queriesPerBatch shard queries.
+    var batchSize = numIndices > 1 ? Math.max(1, Math.floor(16 / numIndices)) : 16;
+    var responses = await fetchBatchedData(instance, reqs, batchSize);
     reqs = [];
 
     debuglog('esJsonArrRequest jsonArr MB: ' + numMBytes(jsonArr));
@@ -902,7 +908,8 @@ mSearch = async function (instance, index, yearDotMonth, termKeys, values, sourc
       if (responses[i].hits == null) {
         console.log('WARNING! msearch returned data.responses[' + i + '].hits is NULL');
         console.log(JSON.stringify(responses[i], null, 2));
-        return;
+        retData[i] = [];
+        continue;
       }
       if (Array.isArray(responses[i].hits.hits) && responses[i].hits.hits.length > 0) {
         if (

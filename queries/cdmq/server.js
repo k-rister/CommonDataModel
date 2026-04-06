@@ -685,12 +685,12 @@ app.post('/api/v1/iterations/details', async (req, res) => {
       var ydm = cdm.buildYearDotMonthRange(inst, 'run', start || null, end || null);
       var gRunIds = runIds;
 
-      // Step 1: Batch-fetch run-level data for all runs in this group
-      var [benchmarks, iterationsByRun, tagsByRun] = await Promise.all([
-        cdm.mgetBenchmarkName(inst, gRunIds, ydm),
-        cdm.mgetIterations(inst, gRunIds, ydm),
-        cdm.mgetTags(inst, gRunIds, ydm)
-      ]);
+      // Step 1: Batch-fetch run-level data for all runs in this group.
+      // Run sequentially to avoid overwhelming OpenSearch's search thread pool
+      // when querying across many monthly indices.
+      var benchmarks = await cdm.mgetBenchmarkName(inst, gRunIds, ydm);
+      var iterationsByRun = await cdm.mgetIterations(inst, gRunIds, ydm);
+      var tagsByRun = await cdm.mgetTags(inst, gRunIds, ydm);
 
       // Collect all iteration IDs across all runs, tracking which run each belongs to
       var allIterIds = [];
@@ -707,13 +707,12 @@ app.post('/api/v1/iterations/details', async (req, res) => {
 
       if (allIterIds.length === 0) continue;
 
-      // Step 2: Batch-fetch iteration-level data for all iterations
-      var [params, samples, primaryMetrics, periodNames] = await Promise.all([
-        cdm.mgetParams(inst, allIterIds, ydm),
-        cdm.mgetSamples(inst, allIterIds, ydm),
-        cdm.mgetPrimaryMetric(inst, allIterIds, ydm),
-        cdm.mgetPrimaryPeriodName(inst, allIterIds, ydm)
-      ]);
+      // Step 2: Batch-fetch iteration-level data for all iterations.
+      // Run sequentially to avoid overwhelming OpenSearch's search thread pool.
+      var params = await cdm.mgetParams(inst, allIterIds, ydm);
+      var samples = await cdm.mgetSamples(inst, allIterIds, ydm);
+      var primaryMetrics = await cdm.mgetPrimaryMetric(inst, allIterIds, ydm);
+      var periodNames = await cdm.mgetPrimaryPeriodName(inst, allIterIds, ydm);
 
       // Step 3: Batch-fetch sample statuses
       var samplesByIter = samples || [];
