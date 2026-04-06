@@ -1,4 +1,6 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useCallback } from 'react';
+import * as api from '../api/cdm';
+import { timeWork } from '../debugLog';
 
 function buildRunUrl(source) {
   if (!source) return null;
@@ -20,18 +22,53 @@ function formatDate(ts) {
 
 function formatMetric(pm) {
   if (!pm) return '-';
-  // pm is a string like "fio::iops" from the API
   if (typeof pm === 'string') return pm;
-  // Handle object format if it ever changes
   const source = pm.source || '';
   const type = pm.type || '';
   return [source, type].filter(Boolean).join('::') || '-';
+}
+
+function formatValue(v) {
+  if (v == null) return '';
+  if (Math.abs(v) >= 1000) return v.toFixed(0);
+  if (Math.abs(v) >= 1) return v.toFixed(2);
+  return v.toPrecision(3);
 }
 
 export default function IterationTable({ iterations, selected, onToggleSelect, onToggleSelectAll, loading }) {
   const [sortKey, setSortKey] = useState(null);
   const [sortDir, setSortDir] = useState('asc');
   const [paramFilter, setParamFilter] = useState('');
+  const [metricValues, setMetricValues] = useState({}); // { iterationId: { mean, stddevPct, sampleValues } }
+  const [metricLoading, setMetricLoading] = useState(false);
+
+  const fetchMetricValues = useCallback(async () => {
+    if (iterations.length === 0) return;
+    setMetricLoading(true);
+    try {
+      // Collect unique run IDs and date range from iterations
+      var runIdSet = new Set();
+      iterations.forEach(function (it) { runIdSet.add(it.runId); });
+      var runIds = Array.from(runIdSet);
+      // Infer start/end from run dates
+      var starts = iterations.filter(function (it) { return it.runBegin; }).map(function (it) { return it.runBegin; });
+      var minBegin = starts.length > 0 ? Math.min.apply(null, starts) : null;
+      var maxBegin = starts.length > 0 ? Math.max.apply(null, starts) : null;
+      var startMonth = minBegin ? new Date(Number(minBegin)) : null;
+      var endMonth = maxBegin ? new Date(Number(maxBegin)) : null;
+      var start = startMonth ? startMonth.getFullYear() + '.' + String(startMonth.getMonth() + 1).padStart(2, '0') : null;
+      var end = endMonth ? endMonth.getFullYear() + '.' + String(endMonth.getMonth() + 1).padStart(2, '0') : null;
+
+      var res = await timeWork('Fetch metric values for ' + iterations.length + ' iteration(s)', function () {
+        return api.getIterationMetricValues(runIds, start, end);
+      });
+      setMetricValues(res.values || {});
+    } catch (err) {
+      console.error('Failed to fetch metric values:', err);
+    } finally {
+      setMetricLoading(false);
+    }
+  }, [iterations]);
 
   const handleSort = (key) => {
     if (sortKey === key) {
@@ -86,8 +123,8 @@ export default function IterationTable({ iterations, selected, onToggleSelect, o
           vb = b.passCount;
           break;
         case 'metric':
-          va = a.primaryMetric || '';
-          vb = b.primaryMetric || '';
+          va = (metricValues[a.iterationId] && metricValues[a.iterationId].mean) || 0;
+          vb = (metricValues[b.iterationId] && metricValues[b.iterationId].mean) || 0;
           break;
         case 'run':
           va = a.runId;
@@ -105,7 +142,7 @@ export default function IterationTable({ iterations, selected, onToggleSelect, o
       return 0;
     });
     return arr;
-  }, [filtered, sortKey, sortDir]);
+  }, [filtered, sortKey, sortDir, metricValues]);
 
   const thClass = (key) => {
     if (sortKey !== key) return '';
@@ -130,15 +167,26 @@ export default function IterationTable({ iterations, selected, onToggleSelect, o
       <div className="results-header">
         <h2>Iterations {iterations.length > 0 && `(${iterations.length})`}</h2>
         {iterations.length > 0 && (
-          <div className="field" style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-            <label style={{ textTransform: 'none', letterSpacing: 0 }}>Filter params:</label>
-            <input
-              type="text"
-              placeholder="e.g. bs=4k"
-              value={paramFilter}
-              onChange={(e) => setParamFilter(e.target.value)}
-              style={{ width: 160 }}
-            />
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <button
+              className="btn btn-sm btn-secondary"
+              onClick={fetchMetricValues}
+              disabled={metricLoading || iterations.length === 0}
+            >
+              {metricLoading ? (
+                <><span className="spinner" style={{ marginRight: 4 }} /> Loading...</>
+              ) : Object.keys(metricValues).length > 0 ? 'Refresh Values' : 'Show Values'}
+            </button>
+            <div className="field" style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+              <label style={{ textTransform: 'none', letterSpacing: 0 }}>Filter params:</label>
+              <input
+                type="text"
+                placeholder="e.g. bs=4k"
+                value={paramFilter}
+                onChange={(e) => setParamFilter(e.target.value)}
+                style={{ width: 160 }}
+              />
+            </div>
           </div>
         )}
       </div>
@@ -248,7 +296,17 @@ export default function IterationTable({ iterations, selected, onToggleSelect, o
                           </span>
                         ))}
                   </td>
-                  <td className="metric-value">{formatMetric(it.primaryMetric)}</td>
+                  <td className="metric-value">
+                    {formatMetric(it.primaryMetric)}
+                    {metricValues[it.iterationId] && metricValues[it.iterationId].mean != null && (
+                      <span className="metric-number">
+                        {' '}{formatValue(metricValues[it.iterationId].mean)}
+                        {metricValues[it.iterationId].stddevPct != null && metricValues[it.iterationId].sampleValues.length > 1 && (
+                          <span className="metric-stddev"> ({metricValues[it.iterationId].stddevPct.toFixed(1)}%)</span>
+                        )}
+                      </span>
+                    )}
+                  </td>
                   <td>{it.sampleCount}</td>
                   <td>
                     {it.passCount > 0 && <span className="status-pass">{it.passCount}P</span>}

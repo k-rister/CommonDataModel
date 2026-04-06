@@ -517,6 +517,16 @@ a.run-id:hover {
   font-weight: 600;
 }
 
+.metric-number {
+  color: var(--accent);
+}
+
+.metric-stddev {
+  color: var(--text-secondary);
+  font-weight: 400;
+  font-size: 11px;
+}
+
 /* Autocomplete dropdown */
 .autocomplete-wrapper {
   position: relative;

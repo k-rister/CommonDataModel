@@ -49,6 +49,10 @@ export async function getIterationDetails(runIds, start, end) {
   return request('POST', '/iterations/details', { runIds, start, end });
 }
 
+export async function getIterationMetricValues(runIds, start, end) {
+  return request('POST', '/iterations/metric-values', { runIds, start, end });
+}
+
 export async function getFieldValues(fieldType, filterParams = {}) {
   const params = new URLSearchParams(filterParams);
   const qs = params.toString();

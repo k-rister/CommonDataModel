@@ -1169,8 +1169,10 @@ mgetPeriodRange = async function (instance, periodIds, yearDotMonth) {
       if (isUndefined(ranges[i][j])) {
         ranges[i][j] = {};
       }
-      ranges[i][j]['begin'] = data[idx][0]['begin'];
-      ranges[i][j]['end'] = data[idx][0]['end'];
+      if (data[idx] && data[idx][0]) {
+        ranges[i][j]['begin'] = data[idx][0]['begin'];
+        ranges[i][j]['end'] = data[idx][0]['end'];
+      }
       idx++;
     }
   }
