@@ -45,6 +45,19 @@ export default function IterationTable({ iterations, selected, onToggleSelect, o
   const filtered = useMemo(() => {
     if (!paramFilter) return iterations;
     const q = paramFilter.toLowerCase();
+    // Support "arg=val" syntax: split on first "=" and match both sides
+    const eqIdx = q.indexOf('=');
+    if (eqIdx >= 0) {
+      const argQ = q.substring(0, eqIdx);
+      const valQ = q.substring(eqIdx + 1);
+      return iterations.filter((it) =>
+        it.params.some(
+          (p) =>
+            (!argQ || (p.arg && p.arg.toLowerCase().includes(argQ))) &&
+            (!valQ || (p.val && String(p.val).toLowerCase().includes(valQ))),
+        ),
+      );
+    }
     return iterations.filter((it) =>
       it.params.some(
         (p) =>
