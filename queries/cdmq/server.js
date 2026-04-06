@@ -224,9 +224,22 @@ app.get('/api/v1/runs', async (req, res) => {
     }
     for (const tag of tagFilters) {
       if (!tag.name && !tag.val) continue;
-      runIds = await intersectRunIds(runIds, (inst) =>
-        cdm.getRunIdsByTag(inst, getYdm(inst, 'tag', req), tag.name || null, tag.val || null)
-      );
+      // Support comma-separated tag values (OR within a tag, AND across tags)
+      var tagVals = tag.val ? tag.val.split(',').filter(Boolean) : [null];
+      if (tagVals.length === 1) {
+        runIds = await intersectRunIds(runIds, (inst) =>
+          cdm.getRunIdsByTag(inst, getYdm(inst, 'tag', req), tag.name || null, tagVals[0])
+        );
+      } else {
+        var unionIds = new Set();
+        for (const val of tagVals) {
+          var ids = await intersectRunIds(runIds, (inst) =>
+            cdm.getRunIdsByTag(inst, getYdm(inst, 'tag', req), tag.name || null, val)
+          );
+          ids.forEach((id) => unionIds.add(id));
+        }
+        runIds = runIds.filter((id) => unionIds.has(id));
+      }
     }
 
     // Filter by param pairs: params=[{"arg":"x","val":"y,z"}, ...]
