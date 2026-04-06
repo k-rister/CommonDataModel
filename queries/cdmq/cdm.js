@@ -1446,7 +1446,10 @@ buildYearDotMonthRange = function (instance, docType, start, end) {
     return true;
   });
 
-  if (filtered.length === 0) return '@*';
+  // If no existing indices match the range, use the start month so the query
+  // targets a specific (non-existent) index and returns empty results, rather
+  // than falling back to @* which would query all months.
+  if (filtered.length === 0) return '@' + (start || end);
 
   // For a single month, just return @YYYY.MM
   if (filtered.length === 1) return '@' + filtered[0];
