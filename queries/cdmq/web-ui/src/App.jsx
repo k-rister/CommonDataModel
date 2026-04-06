@@ -2,6 +2,7 @@ import { useState, useCallback, useEffect } from 'react';
 import SearchPanel from './components/SearchPanel';
 import SelectionBar from './components/SelectionBar';
 import IterationTable from './components/IterationTable';
+import CompareView from './components/CompareView';
 import DebugConsole from './components/DebugConsole';
 import './index.css';
 
@@ -123,7 +124,7 @@ export default function App() {
       )}
 
       {view === 'compare' && (
-        <div className="empty-msg">Phase 2: Comparison bar charts coming soon.</div>
+        <CompareView selected={selected} />
       )}
 
       {view === 'deepdive' && (

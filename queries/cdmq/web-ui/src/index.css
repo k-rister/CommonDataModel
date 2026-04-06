@@ -527,6 +527,33 @@ a.run-id:hover {
   font-size: 11px;
 }
 
+/* Compare View */
+.compare-view {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.compare-chart-panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px;
+  box-shadow: var(--shadow);
+}
+
+.compare-chart-panel h3 {
+  font-size: 15px;
+  margin-bottom: 12px;
+  color: var(--text);
+}
+
+.compare-loading {
+  text-align: center;
+  padding: 48px;
+  color: var(--text-secondary);
+}
+
 /* Autocomplete dropdown */
 .autocomplete-wrapper {
   position: relative;
