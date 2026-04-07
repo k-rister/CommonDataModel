@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import SearchPanel from './components/SearchPanel';
 import SelectionBar from './components/SelectionBar';
 import IterationTable from './components/IterationTable';
@@ -13,6 +13,7 @@ export default function App() {
     localStorage.setItem('theme', theme);
   }, [theme]);
 
+  const searchRef = useRef(null);
   const [iterations, setIterations] = useState([]);
   const [selected, setSelected] = useState(new Map()); // iterationId -> iteration object
   const [loading, setLoading] = useState(false);
@@ -107,7 +108,7 @@ export default function App() {
 
       {view === 'search' && (
         <>
-          <SearchPanel iterations={iterations} onResults={handleSearchResults} onError={setError} loading={loading} setLoading={setLoading} />
+          <SearchPanel ref={searchRef} iterations={iterations} onResults={handleSearchResults} onError={setError} loading={loading} setLoading={setLoading} />
 
           {selected.size > 0 && (
             <SelectionBar selected={selected} onRemove={removeSelected} onClear={clearSelected} />
@@ -119,6 +120,8 @@ export default function App() {
             onToggleSelect={toggleSelect}
             onToggleSelectAll={toggleSelectAll}
             loading={loading}
+            onAddTagFilter={function (name, val) { if (searchRef.current) searchRef.current.addTagFilter(name, val); }}
+            onAddParamFilter={function (arg, val) { if (searchRef.current) searchRef.current.addParamFilter(arg, val); }}
           />
         </>
       )}

@@ -35,7 +35,7 @@ function formatValue(v) {
   return v.toPrecision(3);
 }
 
-export default function IterationTable({ iterations, selected, onToggleSelect, onToggleSelectAll, loading }) {
+export default function IterationTable({ iterations, selected, onToggleSelect, onToggleSelectAll, loading, onAddTagFilter, onAddParamFilter }) {
   const [sortKey, setSortKey] = useState(null);
   const [sortDir, setSortDir] = useState('asc');
   const [paramFilter, setParamFilter] = useState('');
@@ -175,11 +175,13 @@ export default function IterationTable({ iterations, selected, onToggleSelect, o
   }, [sorted]);
 
   // Compute globally varying vs common params and tags across all displayed iterations
-  const { globalVarying, globalCommon } = useMemo(() => {
+  const { globalVarying, commonList } = useMemo(() => {
     var paramValues = {};
     var tagValues = {};
+    var benchmarks = new Set();
     for (var i = 0; i < iterations.length; i++) {
       var it = iterations[i];
+      if (it.benchmark) benchmarks.add(it.benchmark);
       (it.params || []).forEach(function (p) {
         if (!paramValues[p.arg]) paramValues[p.arg] = new Set();
         paramValues[p.arg].add(String(p.val));
@@ -189,17 +191,14 @@ export default function IterationTable({ iterations, selected, onToggleSelect, o
         tagValues[t.name].add(t.val);
       });
     }
+    var benchmarkVaries = benchmarks.size > 1;
     var varyingArgs = new Set();
-    var commonArgs = new Set();
     Object.keys(paramValues).forEach(function (arg) {
       if (paramValues[arg].size > 1) varyingArgs.add(arg);
-      else commonArgs.add(arg);
     });
     var varyingTags = new Set();
-    var commonTags = new Set();
     Object.keys(tagValues).forEach(function (name) {
       if (tagValues[name].size > 1) varyingTags.add(name);
-      else commonTags.add(name);
     });
     // Build per-iteration lists
     var varying = {};
@@ -208,6 +207,12 @@ export default function IterationTable({ iterations, selected, onToggleSelect, o
       var it = iterations[i];
       var v = [];
       var c = [];
+      // Benchmark
+      if (benchmarkVaries) {
+        v.unshift({ key: 'benchmark', val: it.benchmark || '', type: 'benchmark' });
+      } else {
+        c.unshift({ key: 'benchmark', val: it.benchmark || '', type: 'benchmark' });
+      }
       (it.params || []).forEach(function (p) {
         if (varyingArgs.has(p.arg)) v.push({ key: p.arg, val: p.val, type: 'param' });
         else c.push({ key: p.arg, val: p.val, type: 'param' });
@@ -219,7 +224,8 @@ export default function IterationTable({ iterations, selected, onToggleSelect, o
       varying[it.iterationId] = v;
       common[it.iterationId] = c;
     }
-    return { globalVarying: varying, globalCommon: common };
+    var commonList = iterations.length > 0 ? (common[iterations[0].iterationId] || []) : [];
+    return { globalVarying: varying, commonList: commonList };
   }, [iterations]);
 
   return (
@@ -250,6 +256,19 @@ export default function IterationTable({ iterations, selected, onToggleSelect, o
           </div>
         )}
       </div>
+      {commonList.length > 0 && (
+        <div className="results-common">
+          <span className="results-common-label">Common:</span>
+          {commonList.map(function (p, i) {
+            return (
+              <span key={i} className={p.type === 'benchmark' ? 'benchmark-badge' : p.type === 'tag' ? 'tag' : 'param param-common'}>
+                {p.type === 'tag' && <span className="tag-key">{p.key}</span>}
+                {p.type === 'tag' ? '=' + p.val : p.type === 'benchmark' ? p.val : p.key + '=' + p.val}
+              </span>
+            );
+          })}
+        </div>
+      )}
       <div className="results-table-wrap">
         <table className="results-table">
           <thead>
@@ -265,11 +284,7 @@ export default function IterationTable({ iterations, selected, onToggleSelect, o
                   disabled={sorted.length === 0}
                 />
               </th>
-              <th className={thClass('benchmark')} onClick={() => handleSort('benchmark')}>
-                Benchmark
-              </th>
-              <th>Common <span className="tag" style={{fontSize:9,verticalAlign:'middle'}}>tag</span> <span className="param param-common" style={{fontSize:9,verticalAlign:'middle'}}>param</span></th>
-              <th>Unique <span className="tag" style={{fontSize:9,verticalAlign:'middle'}}>tag</span> <span className="param" style={{fontSize:9,verticalAlign:'middle'}}>param</span></th>
+              <th>Unique <span className="benchmark-badge" style={{fontSize:9,verticalAlign:'middle'}}>bench</span> <span className="tag" style={{fontSize:9,verticalAlign:'middle'}}>tag</span> <span className="param" style={{fontSize:9,verticalAlign:'middle'}}>param</span></th>
               <th className={thClass('metric')} onClick={() => handleSort('metric')}>
                 Primary Metric
               </th>
@@ -284,21 +299,21 @@ export default function IterationTable({ iterations, selected, onToggleSelect, o
           <tbody>
             {loading && (
               <tr className="loading-row">
-                <td colSpan={8}>
+                <td colSpan={6}>
                   <span className="spinner" /> Loading iterations...
                 </td>
               </tr>
             )}
             {!loading && sorted.length === 0 && iterations.length === 0 && (
               <tr className="loading-row">
-                <td colSpan={8}>
+                <td colSpan={6}>
                   <span className="empty-msg">Search for runs to see iterations.</span>
                 </td>
               </tr>
             )}
             {!loading && sorted.length === 0 && iterations.length > 0 && (
               <tr className="loading-row">
-                <td colSpan={8}>
+                <td colSpan={6}>
                   <span className="empty-msg">No iterations match the current filter.</span>
                 </td>
               </tr>
@@ -341,23 +356,20 @@ export default function IterationTable({ iterations, selected, onToggleSelect, o
                       onChange={() => onToggleSelect(it)}
                     />
                   </td>
-                  <td>{it.benchmark || '-'}</td>
-                  <td>
-                    {(globalCommon[it.iterationId] || []).length > 0
-                      ? (globalCommon[it.iterationId] || []).map((p, i) => (
-                          <span key={i} className={p.type === 'tag' ? 'tag' : 'param param-common'}>
-                            {p.type === 'tag' && <span className="tag-key">{p.key}</span>}
-                            {p.type === 'tag' ? '=' + p.val : p.key + '=' + p.val}
-                          </span>
-                        ))
-                      : '-'}
-                  </td>
                   <td>
                     {(globalVarying[it.iterationId] || []).length > 0
                       ? (globalVarying[it.iterationId] || []).map((p, i) => (
-                          <span key={i} className={p.type === 'tag' ? 'tag' : 'param'}>
+                          <span key={i}
+                            className={(p.type === 'benchmark' ? 'benchmark-badge' : p.type === 'tag' ? 'tag' : 'param') + (p.type !== 'benchmark' ? ' clickable-filter' : '')}
+                            title={p.type !== 'benchmark' ? 'Click to filter by ' + p.key + '=' + p.val : p.val}
+                            onClick={function (e) {
+                              e.stopPropagation();
+                              if (p.type === 'tag' && onAddTagFilter) onAddTagFilter(p.key, p.val);
+                              else if (p.type === 'param' && onAddParamFilter) onAddParamFilter(p.key, p.val);
+                            }}
+                          >
                             {p.type === 'tag' && <span className="tag-key">{p.key}</span>}
-                            {p.type === 'tag' ? '=' + p.val : p.key + '=' + p.val}
+                            {p.type === 'tag' ? '=' + p.val : p.type === 'benchmark' ? p.val : p.key + '=' + p.val}
                           </span>
                         ))
                       : '-'}

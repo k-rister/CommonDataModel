@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef, useMemo } from 'react';
+import { useState, useCallback, useRef, useMemo, useImperativeHandle, forwardRef } from 'react';
 import * as api from '../api/cdm';
 import { timeWork, addEntry } from '../debugLog';
 import AutocompleteInput from './AutocompleteInput';
@@ -22,7 +22,7 @@ function defaultEnd() {
   return d.getFullYear() + '.' + String(d.getMonth() + 1).padStart(2, '0');
 }
 
-export default function SearchPanel({ iterations, onResults, onError, loading, setLoading }) {
+const SearchPanel = forwardRef(function SearchPanel({ iterations, onResults, onError, loading, setLoading }, ref) {
   const presentValues = useMemo(() => {
     var runIds = new Set();
     var benchmarks = new Set();
@@ -146,6 +146,52 @@ export default function SearchPanel({ iterations, onResults, onError, loading, s
   const removeParamFilter = (index) => {
     setFilters((prev) => ({ ...prev, params: prev.params.filter((_, i) => i !== index) }));
   };
+
+  // Expose methods for external components to add filters
+  useImperativeHandle(ref, () => ({
+    addTagFilter: function (name, val) {
+      setFilters(function (prev) {
+        // Check if this exact filter already exists
+        var exists = prev.tags.some(function (t) {
+          return t.name === name && t.val.split(',').includes(val);
+        });
+        if (exists) return prev;
+        // Check if there's a filter for this tag name — append value
+        var found = false;
+        var tags = prev.tags.map(function (t) {
+          if (t.name === name) {
+            found = true;
+            var vals = t.val ? t.val.split(',').filter(Boolean) : [];
+            vals.push(val);
+            return { name: name, val: vals.join(',') };
+          }
+          return t;
+        });
+        if (!found) tags.push({ name: name, val: val });
+        return { ...prev, tags: tags };
+      });
+    },
+    addParamFilter: function (arg, val) {
+      setFilters(function (prev) {
+        var exists = prev.params.some(function (p) {
+          return p.arg === arg && p.val.split(',').includes(String(val));
+        });
+        if (exists) return prev;
+        var found = false;
+        var params = prev.params.map(function (p) {
+          if (p.arg === arg) {
+            found = true;
+            var vals = p.val ? p.val.split(',').filter(Boolean) : [];
+            vals.push(String(val));
+            return { arg: arg, val: vals.join(',') };
+          }
+          return p;
+        });
+        if (!found) params.push({ arg: arg, val: String(val) });
+        return { ...prev, params: params };
+      });
+    },
+  }));
 
   const handleSearch = useCallback(async () => {
     setLoading(true);
@@ -427,4 +473,6 @@ export default function SearchPanel({ iterations, onResults, onError, loading, s
       </div>
     </div>
   );
-}
+});
+
+export default SearchPanel;
