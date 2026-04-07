@@ -393,7 +393,8 @@ body {
 }
 
 .param-common {
-  background: var(--border);
+  background: rgba(251, 191, 36, 0.1);
+  border: 1px dashed rgba(251, 191, 36, 0.3);
 }
 
 /* Status badges */

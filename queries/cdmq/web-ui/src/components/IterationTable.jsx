@@ -162,49 +162,52 @@ export default function IterationTable({ iterations, selected, onToggleSelect, o
     return parity;
   }, [sorted]);
 
-  // Compute globally unique params: params whose values differ across all displayed iterations
-  const globalUniqueParams = useMemo(() => {
-    // Collect all values per param arg across all iterations
+  // Compute globally varying vs common params and tags across all displayed iterations
+  const { globalVarying, globalCommon } = useMemo(() => {
     var paramValues = {};
+    var tagValues = {};
     for (var i = 0; i < iterations.length; i++) {
       var it = iterations[i];
       (it.params || []).forEach(function (p) {
         if (!paramValues[p.arg]) paramValues[p.arg] = new Set();
         paramValues[p.arg].add(String(p.val));
       });
-    }
-    // A param is globally unique (varying) if it has more than one distinct value
-    var varyingArgs = new Set();
-    Object.keys(paramValues).forEach(function (arg) {
-      if (paramValues[arg].size > 1) varyingArgs.add(arg);
-    });
-    // Also do the same for tags
-    var tagValues = {};
-    for (var i = 0; i < iterations.length; i++) {
-      var it = iterations[i];
       (it.tags || []).forEach(function (t) {
         if (!tagValues[t.name]) tagValues[t.name] = new Set();
         tagValues[t.name].add(t.val);
       });
     }
+    var varyingArgs = new Set();
+    var commonArgs = new Set();
+    Object.keys(paramValues).forEach(function (arg) {
+      if (paramValues[arg].size > 1) varyingArgs.add(arg);
+      else commonArgs.add(arg);
+    });
     var varyingTags = new Set();
+    var commonTags = new Set();
     Object.keys(tagValues).forEach(function (name) {
       if (tagValues[name].size > 1) varyingTags.add(name);
+      else commonTags.add(name);
     });
-    // Build per-iteration list of varying params and tags
-    var result = {};
+    // Build per-iteration lists
+    var varying = {};
+    var common = {};
     for (var i = 0; i < iterations.length; i++) {
       var it = iterations[i];
-      var varying = [];
+      var v = [];
+      var c = [];
       (it.params || []).forEach(function (p) {
-        if (varyingArgs.has(p.arg)) varying.push({ key: p.arg, val: p.val, type: 'param' });
+        if (varyingArgs.has(p.arg)) v.push({ key: p.arg, val: p.val, type: 'param' });
+        else c.push({ key: p.arg, val: p.val, type: 'param' });
       });
       (it.tags || []).forEach(function (t) {
-        if (varyingTags.has(t.name)) varying.push({ key: t.name, val: t.val, type: 'tag' });
+        if (varyingTags.has(t.name)) v.push({ key: t.name, val: t.val, type: 'tag' });
+        else c.push({ key: t.name, val: t.val, type: 'tag' });
       });
-      result[it.iterationId] = varying;
+      varying[it.iterationId] = v;
+      common[it.iterationId] = c;
     }
-    return result;
+    return { globalVarying: varying, globalCommon: common };
   }, [iterations]);
 
   return (
@@ -256,8 +259,8 @@ export default function IterationTable({ iterations, selected, onToggleSelect, o
               <th className={thClass('benchmark')} onClick={() => handleSort('benchmark')}>
                 Benchmark
               </th>
-              <th>Tags</th>
-              <th>Unique Params/Tags</th>
+              <th>Common <span className="tag" style={{fontSize:9,verticalAlign:'middle'}}>tag</span> <span className="param param-common" style={{fontSize:9,verticalAlign:'middle'}}>param</span></th>
+              <th>Unique <span className="tag" style={{fontSize:9,verticalAlign:'middle'}}>tag</span> <span className="param" style={{fontSize:9,verticalAlign:'middle'}}>param</span></th>
               <th className={thClass('metric')} onClick={() => handleSort('metric')}>
                 Primary Metric
               </th>
@@ -321,16 +324,18 @@ export default function IterationTable({ iterations, selected, onToggleSelect, o
                   <td className="run-date">{formatDate(it.runBegin)}</td>
                   <td>{it.benchmark || '-'}</td>
                   <td>
-                    {(it.tags || []).map((t, i) => (
-                      <span key={i} className="tag">
-                        <span className="tag-key">{t.name}</span>={t.val}
-                      </span>
-                    ))}
-                    {(!it.tags || it.tags.length === 0) && '-'}
+                    {(globalCommon[it.iterationId] || []).length > 0
+                      ? (globalCommon[it.iterationId] || []).map((p, i) => (
+                          <span key={i} className={p.type === 'tag' ? 'tag' : 'param param-common'}>
+                            {p.type === 'tag' && <span className="tag-key">{p.key}</span>}
+                            {p.type === 'tag' ? '=' + p.val : p.key + '=' + p.val}
+                          </span>
+                        ))
+                      : '-'}
                   </td>
                   <td>
-                    {(globalUniqueParams[it.iterationId] || []).length > 0
-                      ? (globalUniqueParams[it.iterationId] || []).map((p, i) => (
+                    {(globalVarying[it.iterationId] || []).length > 0
+                      ? (globalVarying[it.iterationId] || []).map((p, i) => (
                           <span key={i} className={p.type === 'tag' ? 'tag' : 'param'}>
                             {p.type === 'tag' && <span className="tag-key">{p.key}</span>}
                             {p.type === 'tag' ? '=' + p.val : p.key + '=' + p.val}
