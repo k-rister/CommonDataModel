@@ -374,10 +374,11 @@ export default function CompareView({ selected }) {
         var stddev = computeStddev(mv);
         var sv = getDimValue(it, seriesBy);
 
-        // Build label excluding: group-by, series-by, and per-group common keys
+        // Build label excluding: group-by and per-group common keys.
+        // Series-by is NOT excluded — each bar has a different series value
+        // and it needs to be visible in the label for identification.
         var excludeKeys = new Set();
         if (groupBy !== 'none') excludeKeys.add(groupBy);
-        if (seriesBy !== 'none') excludeKeys.add(seriesBy);
         var groupCommon = perGroupCommonKeys[gv];
         if (groupCommon) groupCommon.forEach(function (k) { excludeKeys.add(k); });
         var label = buildIterLabel(it, varyingKeys, excludeKeys);
