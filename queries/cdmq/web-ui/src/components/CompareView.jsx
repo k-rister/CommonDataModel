@@ -226,19 +226,32 @@ function buildGroupInfo(groupValue, size, iters, globalVaryingKeys, excludeKeys)
 }
 
 function buildDimOptions(iterations) {
-  var opts = [{ value: 'none', label: 'None' }, { value: 'run', label: 'Run' }, { value: 'benchmark', label: 'Benchmark' }];
-  var paramArgs = new Set();
-  var tagNames = new Set();
+  var opts = [{ value: 'none', label: 'None' }];
+  // Only include dimensions that have more than one distinct value
+  var runs = new Set();
+  var benchmarks = new Set();
+  var paramValues = {};
+  var tagValues = {};
   for (var i = 0; i < iterations.length; i++) {
     var it = iterations[i];
-    (it.params || []).forEach(function (p) { paramArgs.add(p.arg); });
-    (it.tags || []).forEach(function (t) { tagNames.add(t.name); });
+    if (it.runId) runs.add(it.runId);
+    if (it.benchmark) benchmarks.add(it.benchmark);
+    (it.params || []).forEach(function (p) {
+      if (!paramValues[p.arg]) paramValues[p.arg] = new Set();
+      paramValues[p.arg].add(String(p.val));
+    });
+    (it.tags || []).forEach(function (t) {
+      if (!tagValues[t.name]) tagValues[t.name] = new Set();
+      tagValues[t.name].add(t.val);
+    });
   }
-  Array.from(paramArgs).sort().forEach(function (arg) {
-    opts.push({ value: 'param:' + arg, label: 'Param: ' + arg });
+  if (runs.size > 1) opts.push({ value: 'run', label: 'Run' });
+  if (benchmarks.size > 1) opts.push({ value: 'benchmark', label: 'Benchmark' });
+  Object.keys(paramValues).sort().forEach(function (arg) {
+    if (paramValues[arg].size > 1) opts.push({ value: 'param:' + arg, label: 'Param: ' + arg });
   });
-  Array.from(tagNames).sort().forEach(function (name) {
-    opts.push({ value: 'tag:' + name, label: 'Tag: ' + name });
+  Object.keys(tagValues).sort().forEach(function (name) {
+    if (tagValues[name].size > 1) opts.push({ value: 'tag:' + name, label: 'Tag: ' + name });
   });
   return opts;
 }
