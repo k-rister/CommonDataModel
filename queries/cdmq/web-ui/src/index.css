@@ -727,20 +727,38 @@ a.run-id:hover {
   border-radius: 2px;
 }
 
-.compare-group-labels {
+.compare-group-bar {
   display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  padding: 4px 0 8px;
+  margin-left: 60px;
+  margin-right: 30px;
 }
 
-.compare-group-label {
-  font-size: 11px;
-  padding: 2px 8px;
-  background: var(--surface-alt);
+.compare-group-bar-item {
+  text-align: center;
+  padding: 6px 4px;
   border: 1px solid var(--border);
-  border-radius: 3px;
+  border-bottom: none;
+  border-radius: var(--radius) var(--radius) 0 0;
+  background: var(--surface-alt);
+  overflow: hidden;
+}
+
+.compare-group-bar-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  overflow: hidden;
+}
+
+.compare-group-bar-common {
+  font-size: 10px;
   color: var(--text-secondary);
+  margin-top: 2px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  overflow: hidden;
 }
 
 .compare-loading {

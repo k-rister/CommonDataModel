@@ -52,11 +52,12 @@ function formatDimValue(dim, val) {
 function computeCommonVarying(iters) {
   if (iters.length === 0) return { common: [], varyingKeys: new Set() };
 
-  // Collect all param arg values and tag name values across iterations
-  var paramValues = {}; // arg -> Set of values
-  var tagValues = {};   // name -> Set of values
+  var benchmarks = new Set();
+  var paramValues = {};
+  var tagValues = {};
 
   iters.forEach(function (it) {
+    if (it.benchmark) benchmarks.add(it.benchmark);
     (it.params || []).forEach(function (p) {
       if (!paramValues[p.arg]) paramValues[p.arg] = new Set();
       paramValues[p.arg].add(String(p.val));
@@ -69,6 +70,13 @@ function computeCommonVarying(iters) {
 
   var common = [];
   var varyingKeys = new Set();
+
+  // Benchmark
+  if (benchmarks.size === 1) {
+    common.push({ key: 'benchmark', val: Array.from(benchmarks)[0] });
+  } else if (benchmarks.size > 1) {
+    varyingKeys.add('benchmark');
+  }
 
   Object.keys(paramValues).sort().forEach(function (arg) {
     if (paramValues[arg].size === 1) {
@@ -88,14 +96,21 @@ function computeCommonVarying(iters) {
   return { common: common, varyingKeys: varyingKeys };
 }
 
-// Build label from an iteration showing only varying params and tags
-function buildIterLabel(it, varyingKeys) {
+// Build label from an iteration showing only varying params/tags/benchmark
+// that are NOT already shown by the group-by or series-by dimensions
+function buildIterLabel(it, varyingKeys, excludeKeys) {
   var parts = [];
+  // Include benchmark if it varies and isn't covered by group/series
+  if (varyingKeys.has('benchmark') && !excludeKeys.has('benchmark')) {
+    parts.push(it.benchmark || '');
+  }
   (it.params || []).forEach(function (p) {
-    if (varyingKeys.has('param:' + p.arg)) parts.push(p.arg + '=' + p.val);
+    var key = 'param:' + p.arg;
+    if (varyingKeys.has(key) && !excludeKeys.has(key)) parts.push(p.arg + '=' + p.val);
   });
   (it.tags || []).forEach(function (t) {
-    if (varyingKeys.has('tag:' + t.name)) parts.push(t.name + '=' + t.val);
+    var key = 'tag:' + t.name;
+    if (varyingKeys.has(key) && !excludeKeys.has(key)) parts.push(t.name + '=' + t.val);
   });
   return parts.join(', ') || it.iterationId.substring(0, 8);
 }
@@ -124,9 +139,9 @@ function naturalCompare(a, b) {
 function WrappedAxisTick(props) {
   var x = props.x, y = props.y, payload = props.payload;
   if (!payload || !payload.value) return null;
-  // Split on ", " to get individual param=val segments
-  var segments = String(payload.value).split(', ');
-  // Group into lines of ~30 chars
+
+  var value = String(payload.value);
+  var segments = value.split(', ');
   var lines = [];
   var current = '';
   for (var i = 0; i < segments.length; i++) {
@@ -153,6 +168,61 @@ function WrappedAxisTick(props) {
       </text>
     </g>
   );
+}
+
+// Build group info including per-group common items
+// (items that vary globally but are the same within this group)
+function buildGroupInfo(groupValue, size, iters, globalVaryingKeys, excludeKeys) {
+  var label = formatDimLabel(excludeKeys.values().next().value || '') + '=' + formatDimValue('', groupValue);
+  // For the first key in excludeKeys which is groupBy
+  for (var k of excludeKeys) {
+    if (k !== 'none') {
+      label = formatDimLabel(k) + '=' + formatDimValue(k, groupValue);
+      break;
+    }
+  }
+
+  if (iters.length <= 1) {
+    return { label: label, size: size, groupCommon: [] };
+  }
+
+  // Find params/tags that are in globalVaryingKeys but common within this group
+  var groupCommon = [];
+  var paramValues = {};
+  var tagValues = {};
+  var benchmarks = new Set();
+
+  iters.forEach(function (it) {
+    if (it.benchmark) benchmarks.add(it.benchmark);
+    (it.params || []).forEach(function (p) {
+      var key = 'param:' + p.arg;
+      if (!globalVaryingKeys.has(key) || excludeKeys.has(key)) return;
+      if (!paramValues[p.arg]) paramValues[p.arg] = new Set();
+      paramValues[p.arg].add(String(p.val));
+    });
+    (it.tags || []).forEach(function (t) {
+      var key = 'tag:' + t.name;
+      if (!globalVaryingKeys.has(key) || excludeKeys.has(key)) return;
+      if (!tagValues[t.name]) tagValues[t.name] = new Set();
+      tagValues[t.name].add(t.val);
+    });
+  });
+
+  if (globalVaryingKeys.has('benchmark') && !excludeKeys.has('benchmark') && benchmarks.size === 1) {
+    groupCommon.push(Array.from(benchmarks)[0]);
+  }
+  Object.keys(paramValues).sort().forEach(function (arg) {
+    if (paramValues[arg].size === 1) {
+      groupCommon.push(arg + '=' + Array.from(paramValues[arg])[0]);
+    }
+  });
+  Object.keys(tagValues).sort().forEach(function (name) {
+    if (tagValues[name].size === 1) {
+      groupCommon.push(name + '=' + Array.from(tagValues[name])[0]);
+    }
+  });
+
+  return { label: label, size: size, groupCommon: groupCommon };
 }
 
 function buildDimOptions(iterations) {
@@ -249,21 +319,53 @@ export default function CompareView({ selected }) {
         });
       }
 
+      // Precompute per-group common keys (items that vary globally but are common within a group)
+      var perGroupCommonKeys = {};
+      if (groupBy !== 'none') {
+        var groupedIters = {};
+        sorted.forEach(function (it) {
+          var gv = getDimValue(it, groupBy);
+          if (!groupedIters[gv]) groupedIters[gv] = [];
+          groupedIters[gv].push(it);
+        });
+        Object.keys(groupedIters).forEach(function (gv) {
+          var gIters = groupedIters[gv];
+          if (gIters.length <= 1) { perGroupCommonKeys[gv] = new Set(); return; }
+          var pv = {};
+          var tv = {};
+          gIters.forEach(function (it) {
+            (it.params || []).forEach(function (p) {
+              if (!pv[p.arg]) pv[p.arg] = new Set();
+              pv[p.arg].add(String(p.val));
+            });
+            (it.tags || []).forEach(function (t) {
+              if (!tv[t.name]) tv[t.name] = new Set();
+              tv[t.name].add(t.val);
+            });
+          });
+          var common = new Set();
+          Object.keys(pv).forEach(function (arg) {
+            if (pv[arg].size === 1 && varyingKeys.has('param:' + arg)) common.add('param:' + arg);
+          });
+          Object.keys(tv).forEach(function (name) {
+            if (tv[name].size === 1 && varyingKeys.has('tag:' + name)) common.add('tag:' + name);
+          });
+          perGroupCommonKeys[gv] = common;
+        });
+      }
+
       // Build chart data with gap entries between groups
       var chartData = [];
-      var groupBoundaries = []; // indices where new groups start
       var prevGroup = null;
       for (var i = 0; i < sorted.length; i++) {
         var it = sorted[i];
         var gv = getDimValue(it, groupBy);
 
         // Insert gap between groups
-        if (groupBy !== 'none' && prevGroup !== null && gv !== prevGroup) {
-          chartData.push({ name: '', value: null, isGap: true });
-          groupBoundaries.push(chartData.length);
-        }
-        if (prevGroup !== gv) {
-          groupBoundaries.push(chartData.length);
+        if (groupBy !== 'none' && gv !== prevGroup) {
+          if (prevGroup !== null) {
+            chartData.push({ name: '', value: null, isGap: true });
+          }
         }
         prevGroup = gv;
 
@@ -272,8 +374,13 @@ export default function CompareView({ selected }) {
         var stddev = computeStddev(mv);
         var sv = getDimValue(it, seriesBy);
 
-        // Build label from varying params/tags only
-        var label = buildIterLabel(it, varyingKeys);
+        // Build label excluding: group-by, series-by, and per-group common keys
+        var excludeKeys = new Set();
+        if (groupBy !== 'none') excludeKeys.add(groupBy);
+        if (seriesBy !== 'none') excludeKeys.add(seriesBy);
+        var groupCommon = perGroupCommonKeys[gv];
+        if (groupCommon) groupCommon.forEach(function (k) { excludeKeys.add(k); });
+        var label = buildIterLabel(it, varyingKeys, excludeKeys);
 
         chartData.push({
           name: label,
@@ -297,25 +404,42 @@ export default function CompareView({ selected }) {
         });
       }
 
-      // Compute group label positions (center of each group) for secondary X-axis labels
-      var groupLabels = [];
+      // Compute group sizes and per-group common items for labels above the chart
+      var groupInfo = [];
       if (groupBy !== 'none') {
-        var groups = {};
-        chartData.forEach(function (d, idx) {
+        // Collect iterations per group
+        var groupIters = {};
+        sorted.forEach(function (it) {
+          var gv = getDimValue(it, groupBy);
+          if (!groupIters[gv]) groupIters[gv] = [];
+          groupIters[gv].push(it);
+        });
+        // Keys to exclude from per-group common: globally common, group-by, series-by
+        var excludeFromGroupCommon = new Set();
+        if (groupBy !== 'none') excludeFromGroupCommon.add(groupBy);
+        if (seriesBy !== 'none') excludeFromGroupCommon.add(seriesBy);
+
+        var currentGroup = null;
+        var currentCount = 0;
+        chartData.forEach(function (d) {
           if (d.isGap) return;
-          if (!groups[d.groupValue]) groups[d.groupValue] = { start: idx, end: idx };
-          groups[d.groupValue].end = idx;
+          if (d.groupValue !== currentGroup) {
+            if (currentGroup !== null) {
+              var gi = buildGroupInfo(currentGroup, currentCount, groupIters[currentGroup] || [], varyingKeys, excludeFromGroupCommon);
+              groupInfo.push(gi);
+            }
+            currentGroup = d.groupValue;
+            currentCount = 0;
+          }
+          currentCount++;
         });
-        Object.keys(groups).forEach(function (gv) {
-          var g = groups[gv];
-          groupLabels.push({
-            position: (g.start + g.end) / 2,
-            label: formatDimLabel(groupBy) + '=' + formatDimValue(groupBy, gv),
-          });
-        });
+        if (currentGroup !== null) {
+          var gi = buildGroupInfo(currentGroup, currentCount, groupIters[currentGroup] || [], varyingKeys, excludeFromGroupCommon);
+          groupInfo.push(gi);
+        }
       }
 
-      result.push({ metricName: metricName, data: chartData, legendData: legendData, groupLabels: groupLabels, commonItems: commonItems });
+      result.push({ metricName: metricName, data: chartData, legendData: legendData, commonItems: commonItems, groupInfo: groupInfo });
     });
 
     return result;
@@ -389,10 +513,17 @@ export default function CompareView({ selected }) {
               </div>
             )}
 
-            {chart.groupLabels.length > 0 && (
-              <div className="compare-group-labels">
-                {chart.groupLabels.map(function (gl, gi) {
-                  return <span key={gi} className="compare-group-label">{gl.label}</span>;
+            {chart.groupInfo.length > 0 && (
+              <div className="compare-group-bar">
+                {chart.groupInfo.map(function (g, gi) {
+                  return (
+                    <div key={gi} className="compare-group-bar-item" style={{ flex: g.size }}>
+                      <div className="compare-group-bar-label">{g.label}</div>
+                      {g.groupCommon && g.groupCommon.length > 0 && (
+                        <div className="compare-group-bar-common">{g.groupCommon.join(', ')}</div>
+                      )}
+                    </div>
+                  );
                 })}
               </div>
             )}
@@ -422,7 +553,7 @@ export default function CompareView({ selected }) {
                   content={function (props) {
                     if (!props.active || !props.payload || props.payload.length === 0) return null;
                     var entry = props.payload[0].payload;
-                    if (!entry || entry.isGap || entry.value == null) return null;
+                    if (!entry || entry.isGap || entry.isGroupLabel || entry.value == null) return null;
                     var text = formatValue(entry.value);
                     if (entry.samples > 1 && entry.stddevPct != null) {
                       text += ' (\u00b1' + entry.stddevPct.toFixed(1) + '%)';
@@ -452,7 +583,7 @@ export default function CompareView({ selected }) {
                 <Bar dataKey="value" radius={[4, 4, 0, 0]}>
                   <ErrorBar dataKey="errorY" width={4} strokeWidth={2} stroke="var(--text-secondary)" />
                   {chart.data.map(function (entry, idx) {
-                    return <Cell key={idx} fill={entry.isGap ? 'transparent' : entry.color} />;
+                    return <Cell key={idx} fill={entry.isGap || entry.isGroupLabel ? 'transparent' : entry.color} />;
                   })}
                 </Bar>
               </BarChart>
