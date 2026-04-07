@@ -793,6 +793,64 @@ a.run-id:hover {
   padding: 0 0 0 2px;
 }
 
+.compare-display-toggle {
+  display: flex;
+  gap: 2px;
+}
+
+.compare-display-toggle .btn {
+  padding: 3px 8px;
+  font-size: 11px;
+}
+
+.compare-supp-mode {
+  font-size: 9px;
+  opacity: 0.6;
+  margin-left: 2px;
+}
+
+.compare-chart-with-labels {
+  display: flex;
+  align-items: stretch;
+}
+
+.compare-chart-area {
+  flex: 1;
+  min-width: 0;
+}
+
+.compare-yaxis-label {
+  writing-mode: vertical-lr;
+  text-align: center;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  padding: 4px 2px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  white-space: nowrap;
+}
+
+.compare-yaxis-left {
+  transform: rotate(180deg);
+}
+
+.compare-yaxis-right {
+  /* natural vertical-lr direction */
+}
+
+.compare-panel-metric {
+  border-top: 1px solid var(--border);
+  margin-top: 4px;
+}
+
+.compare-panel-metric-label {
+  font-size: 12px;
+  font-weight: 600;
+  padding: 8px 0 0 60px;
+}
+
 .compare-loading {
   text-align: center;
   padding: 48px;

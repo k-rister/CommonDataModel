@@ -11,6 +11,20 @@ const COLORS = [
 
 const SUPP_COLORS = ['#f97316', '#e879f9', '#14b8a6', '#ef4444', '#8b5cf6', '#06b6d4'];
 
+// Smart Y-axis tick formatter: adjusts decimal precision based on value magnitude
+function formatYTick(value) {
+  if (value == null) return '';
+  var abs = Math.abs(value);
+  if (abs === 0) return '0';
+  if (abs >= 1000000) return (value / 1000000).toFixed(1) + 'M';
+  if (abs >= 10000) return (value / 1000).toFixed(1) + 'k';
+  if (abs >= 100) return Math.round(value).toString();
+  if (abs >= 10) return value.toFixed(1);
+  if (abs >= 1) return value.toFixed(2);
+  if (abs >= 0.1) return value.toFixed(3);
+  return value.toPrecision(3);
+}
+
 function formatValue(v) {
   if (v == null) return '';
   if (Math.abs(v) >= 1000) return v.toFixed(0);
@@ -267,6 +281,7 @@ export default function CompareView({ selected, groupBy, setGroupBy, seriesBy, s
   var [addMetricSource, setAddMetricSource] = useState('');
   var [addMetricType, setAddMetricType] = useState('');
   var [addMetricLoading, setAddMetricLoading] = useState(false);
+  var [addMetricDisplay, setAddMetricDisplay] = useState('panel'); // 'overlay' or 'panel'
   var [showAddMetric, setShowAddMetric] = useState(false);
 
   var iterations = useMemo(function () {
@@ -342,7 +357,7 @@ export default function CompareView({ selected, groupBy, setGroupBy, seriesBy, s
       return api.getSupplementalMetric(ctx.runIds, ctx.start, ctx.end, addMetricSource, addMetricType);
     }).then(function (res) {
       setSupplementalMetrics(function (prev) {
-        return prev.concat([{ source: addMetricSource, type: addMetricType, values: res.values || {} }]);
+        return prev.concat([{ source: addMetricSource, type: addMetricType, values: res.values || {}, display: addMetricDisplay }]);
       });
       setShowAddMetric(false);
     }).catch(function (err) {
@@ -350,7 +365,7 @@ export default function CompareView({ selected, groupBy, setGroupBy, seriesBy, s
     }).finally(function () {
       setAddMetricLoading(false);
     });
-  }, [iterations, addMetricSource, addMetricType, supplementalMetrics]);
+  }, [iterations, addMetricSource, addMetricType, addMetricDisplay, supplementalMetrics]);
 
   var handleRemoveMetric = useCallback(function (idx) {
     setSupplementalMetrics(function (prev) { return prev.filter(function (_, i) { return i !== idx; }); });
@@ -471,10 +486,13 @@ export default function CompareView({ selected, groupBy, setGroupBy, seriesBy, s
           color: seriesBy !== 'none' ? seriesColorMap[sv] : COLORS[i % COLORS.length],
           isGap: false,
         };
-        // Add supplemental metric values
+        // Add supplemental metric values with stddev for error bars
         supplementalMetrics.forEach(function (sm, si) {
           var smv = sm.values[it.iterationId];
           entry['supp_' + si] = smv ? smv.mean : null;
+          entry['supp_' + si + '_stddevPct'] = smv ? smv.stddevPct : null;
+          entry['supp_' + si + '_error'] = smv ? computeStddev(smv) : 0;
+          entry['supp_' + si + '_samples'] = smv ? smv.sampleValues.length : 0;
         });
         chartData.push(entry);
       }
@@ -584,6 +602,15 @@ export default function CompareView({ selected, groupBy, setGroupBy, seriesBy, s
           </div>
         )}
         {showAddMetric && addMetricSource && addMetricType && (
+          <div className="compare-control">
+            <label>Display</label>
+            <div className="compare-display-toggle">
+              <button className={'btn btn-sm ' + (addMetricDisplay === 'overlay' ? 'btn-primary' : 'btn-secondary')} onClick={function () { setAddMetricDisplay('overlay'); }}>Overlay</button>
+              <button className={'btn btn-sm ' + (addMetricDisplay === 'panel' ? 'btn-primary' : 'btn-secondary')} onClick={function () { setAddMetricDisplay('panel'); }}>Own Panel</button>
+            </div>
+          </div>
+        )}
+        {showAddMetric && addMetricSource && addMetricType && (
           <button className="btn btn-sm btn-primary" onClick={handleAddMetric} disabled={addMetricLoading}>
             {addMetricLoading ? <><span className="spinner" style={{ marginRight: 4 }} /> Loading...</> : 'Add'}
           </button>
@@ -598,6 +625,7 @@ export default function CompareView({ selected, groupBy, setGroupBy, seriesBy, s
             return (
               <span key={si} className="compare-supp-chip" style={{ borderColor: SUPP_COLORS[si % SUPP_COLORS.length], color: SUPP_COLORS[si % SUPP_COLORS.length] }}>
                 {sm.source}::{sm.type}
+                <span className="compare-supp-mode">{sm.display === 'panel' ? 'panel' : 'overlay'}</span>
                 <button onClick={function () { handleRemoveMetric(si); }}>&times;</button>
               </span>
             );
@@ -617,6 +645,7 @@ export default function CompareView({ selected, groupBy, setGroupBy, seriesBy, s
         }
 
         var chartHeight = Math.max(400, nonGapData.length * 30 + 150);
+        var hasOverlays = supplementalMetrics.some(function (m) { return m.display !== 'panel'; });
 
         return (
           <div key={ci} className="compare-chart-panel">
@@ -655,8 +684,83 @@ export default function CompareView({ selected, groupBy, setGroupBy, seriesBy, s
               </div>
             )}
 
+            {/* Panel-mode supplemental metrics: rendered above the primary chart */}
+            {supplementalMetrics.map(function (sm, si) {
+              if (sm.display !== 'panel') return null;
+              var color = SUPP_COLORS[si % SUPP_COLORS.length];
+              var dataKey = 'supp_' + si;
+              var vals = [];
+              chart.data.forEach(function (d) { if (!d.isGap && d[dataKey] != null) vals.push(d[dataKey]); });
+              var min = vals.length > 0 ? Math.min.apply(null, vals) : 0;
+              var max = vals.length > 0 ? Math.max.apply(null, vals) : 1;
+              var pad = (max - min) * 0.1 || 0.1;
+              return (
+                <div key={'panel-' + si} className="compare-panel-metric">
+                  <div className="compare-chart-with-labels">
+                    <div className="compare-yaxis-label compare-yaxis-left" style={{ color: color }}>{sm.source}::{sm.type}</div>
+                    <div className="compare-chart-area">
+                  <ResponsiveContainer width="100%" height={180}>
+                    <ComposedChart data={chart.data} margin={{ top: 10, right: 30, left: 60, bottom: 5 }} barCategoryGap="10%">
+                      <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
+                      <XAxis dataKey="name" hide={true} />
+                      <YAxis
+                        yAxisId="left"
+                        domain={[Math.max(0, min - pad), max + pad]}
+                        tick={{ fontSize: 11, fill: 'var(--text-secondary)' }}
+                        tickFormatter={formatYTick}
+                        stroke="var(--border)"
+                      />
+                      <Tooltip
+                        content={function (props) {
+                          if (!props.active || !props.payload || props.payload.length === 0) return null;
+                          var entry = props.payload[0].payload;
+                          if (!entry || entry.isGap) return null;
+                          var v = entry[dataKey];
+                          return (
+                            <div style={{
+                              background: 'var(--surface)', border: '1px solid var(--border)',
+                              borderRadius: 'var(--radius)', padding: '8px 12px', color: 'var(--text)',
+                              fontSize: 12, boxShadow: 'var(--shadow)',
+                            }}>
+                              {entry.name && <div>{entry.name}</div>}
+                              <div style={{ fontWeight: 600, color: color, marginTop: 4 }}>
+                                {sm.source}::{sm.type}: {v != null ? (function () {
+                                  var txt = formatValue(v);
+                                  var pct = entry[dataKey + '_stddevPct'];
+                                  var samp = entry[dataKey + '_samples'];
+                                  if (samp > 1 && pct != null) txt += ' (\u00b1' + pct.toFixed(1) + '%)';
+                                  return txt;
+                                })() : 'no data'}
+                              </div>
+                            </div>
+                          );
+                        }}
+                      />
+                      {hasOverlays ? (
+                        <YAxis yAxisId="right" orientation="right" width={80} tick={false} axisLine={false} />
+                      ) : (
+                        <YAxis yAxisId="right" orientation="right" width={1} tick={false} axisLine={false} />
+                      )}
+                      <Bar dataKey={dataKey} yAxisId="left" radius={[3, 3, 0, 0]}>
+                        <ErrorBar dataKey={dataKey + '_error'} width={4} strokeWidth={2} stroke="var(--text-secondary)" />
+                        {chart.data.map(function (entry, idx) {
+                          return <Cell key={idx} fill={entry.isGap ? 'transparent' : color} fillOpacity={0.7} />;
+                        })}
+                      </Bar>
+                    </ComposedChart>
+                  </ResponsiveContainer>
+                    </div>
+                    {hasOverlays && <div className="compare-yaxis-label compare-yaxis-right">&nbsp;</div>}
+                  </div>
+                </div>
+              );
+            })}
+
+            <div className="compare-chart-with-labels">
+              <div className="compare-yaxis-label compare-yaxis-left">{chart.metricName}</div>
+              <div className="compare-chart-area">
             <ResponsiveContainer width="100%" height={chartHeight}>
-              <ComposedChart data={chart.data} margin={{ top: 20, right: supplementalMetrics.length > 0 ? 60 : 30, left: 60, bottom: 120 }} barCategoryGap="10%">
+              <ComposedChart data={chart.data} margin={{ top: 20, right: 30, left: 60, bottom: 120 }} barCategoryGap="10%">
                 <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
                 <XAxis
                   dataKey="name"
@@ -668,21 +772,16 @@ export default function CompareView({ selected, groupBy, setGroupBy, seriesBy, s
                 <YAxis
                   yAxisId="left"
                   tick={{ fontSize: 12, fill: 'var(--text-secondary)' }}
+                  tickFormatter={formatYTick}
                   stroke="var(--border)"
-                  label={{
-                    value: chart.metricName,
-                    angle: -90,
-                    position: 'insideLeft',
-                    offset: -45,
-                    style: { fontSize: 13, fill: 'var(--text-secondary)' },
-                  }}
                 />
-                {supplementalMetrics.length > 0 && (function () {
-                  // Compute domain from actual supplemental values
+                {supplementalMetrics.some(function (m) { return m.display !== 'panel'; }) && (function () {
+                  // Compute domain from overlay-mode supplemental values only
                   var allVals = [];
                   chart.data.forEach(function (d) {
                     if (d.isGap) return;
                     supplementalMetrics.forEach(function (sm, si) {
+                      if (sm.display === 'panel') return;
                       var v = d['supp_' + si];
                       if (v != null) allVals.push(v);
                     });
@@ -694,19 +793,17 @@ export default function CompareView({ selected, groupBy, setGroupBy, seriesBy, s
                     <YAxis
                       yAxisId="right"
                       orientation="right"
+                      width={80}
                       domain={[Math.max(0, min - pad), max + pad]}
                       tick={{ fontSize: 12, fill: 'var(--text-secondary)' }}
+                      tickFormatter={formatYTick}
                       stroke="var(--border)"
-                      label={{
-                        value: supplementalMetrics.map(function (m) { return m.source + '::' + m.type; }).join(', '),
-                        angle: 90,
-                        position: 'insideRight',
-                        offset: -45,
-                        style: { fontSize: 13, fill: 'var(--text-secondary)' },
-                      }}
                     />
                   );
                 })()}
+                {!hasOverlays && (
+                  <YAxis yAxisId="right" orientation="right" width={1} tick={false} axisLine={false} />
+                )}
                 <Tooltip
                   content={function (props) {
                     if (!props.active || !props.payload || props.payload.length === 0) return null;
@@ -726,9 +823,15 @@ export default function CompareView({ selected, groupBy, setGroupBy, seriesBy, s
                     metricLines.push({ label: chart.metricName, value: text, color: entry.color });
                     supplementalMetrics.forEach(function (sm, si) {
                       var sv = entry['supp_' + si];
+                      var svPct = entry['supp_' + si + '_stddevPct'];
+                      var svSamples = entry['supp_' + si + '_samples'];
+                      var valText = sv != null ? formatValue(sv) : 'no data';
+                      if (sv != null && svSamples > 1 && svPct != null) {
+                        valText += ' (\u00b1' + svPct.toFixed(1) + '%)';
+                      }
                       metricLines.push({
                         label: sm.source + '::' + sm.type,
-                        value: sv != null ? formatValue(sv) : 'no data',
+                        value: valText,
                         color: SUPP_COLORS[si % SUPP_COLORS.length],
                       });
                     });
@@ -755,6 +858,7 @@ export default function CompareView({ selected, groupBy, setGroupBy, seriesBy, s
                   })}
                 </Bar>
                 {supplementalMetrics.map(function (sm, si) {
+                  if (sm.display === 'panel') return null;
                   return (
                     <Line
                       key={si}
@@ -771,6 +875,16 @@ export default function CompareView({ selected, groupBy, setGroupBy, seriesBy, s
                 })}
               </ComposedChart>
             </ResponsiveContainer>
+              </div>
+              {hasOverlays ? (
+                <div className="compare-yaxis-label compare-yaxis-right">
+                  {supplementalMetrics.filter(function (m) { return m.display !== 'panel'; }).map(function (m) { return m.source + '::' + m.type; }).join(', ')}
+                </div>
+              ) : supplementalMetrics.length > 0 ? (
+                <div className="compare-yaxis-label compare-yaxis-right">&nbsp;</div>
+              ) : null}
+            </div>
+
           </div>
         );
       })}
