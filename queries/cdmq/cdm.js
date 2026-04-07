@@ -857,8 +857,9 @@ mSearch = async function (instance, index, yearDotMonth, termKeys, values, sourc
       req._source = source;
     }
     for (var x = 0; x < termKeys.length; x++) {
-      var termStr = '{ "term": { "' + termKeys[x] + '": "' + values[x][i] + '"}}';
-      req['query']['bool']['filter'].push(JSON.parse(termStr));
+      var termObj = { term: {} };
+      termObj.term[termKeys[x]] = values[x][i];
+      req['query']['bool']['filter'].push(termObj);
 
       if (isDefined(size)) {
         req.size = size;
