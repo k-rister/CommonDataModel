@@ -256,11 +256,9 @@ function buildDimOptions(iterations) {
   return opts;
 }
 
-export default function CompareView({ selected }) {
+export default function CompareView({ selected, groupBy, setGroupBy, seriesBy, setSeriesBy }) {
   var [metricValues, setMetricValues] = useState({});
   var [loading, setLoading] = useState(false);
-  var [groupBy, setGroupBy] = useState('none');
-  var [seriesBy, setSeriesBy] = useState('none');
 
   var iterations = useMemo(function () {
     return Array.from(selected.values());

@@ -6,6 +6,37 @@ import CompareView from './components/CompareView';
 import DebugConsole from './components/DebugConsole';
 import './index.css';
 
+// Encode workflow state into a URL hash string
+function encodeState(filters, selectedRunIds, view, groupBy, seriesBy) {
+  var state = {};
+  if (filters) {
+    if (filters.benchmark) state.benchmark = filters.benchmark;
+    if (filters.primaryMetric) state.primaryMetric = filters.primaryMetric;
+    if (filters.name) state.name = filters.name;
+    if (filters.email) state.email = filters.email;
+    if (filters.run) state.run = filters.run;
+    if (filters.start) state.start = filters.start;
+    if (filters.end) state.end = filters.end;
+    if (filters.tags && filters.tags.length > 0) state.tags = filters.tags;
+    if (filters.params && filters.params.length > 0) state.params = filters.params;
+  }
+  if (selectedRunIds && selectedRunIds.length > 0) state.selectedRuns = selectedRunIds;
+  if (view && view !== 'search') state.view = view;
+  if (groupBy && groupBy !== 'none') state.groupBy = groupBy;
+  if (seriesBy && seriesBy !== 'none') state.seriesBy = seriesBy;
+  return '#' + encodeURIComponent(JSON.stringify(state));
+}
+
+// Decode workflow state from URL hash
+function decodeState(hash) {
+  if (!hash || hash.length <= 1) return null;
+  try {
+    return JSON.parse(decodeURIComponent(hash.substring(1)));
+  } catch (e) {
+    return null;
+  }
+}
+
 export default function App() {
   const [theme, setTheme] = useState(() => localStorage.getItem('theme') || 'dark');
   useEffect(() => {
@@ -15,63 +46,137 @@ export default function App() {
 
   const searchRef = useRef(null);
   const [iterations, setIterations] = useState([]);
-  const [selected, setSelected] = useState(new Map()); // iterationId -> iteration object
+  const [selected, setSelected] = useState(new Map());
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
-  const [view, setView] = useState('search'); // search | compare | deepdive
+  const [view, setView] = useState('search');
+  const [groupBy, setGroupBy] = useState('none');
+  const [seriesBy, setSeriesBy] = useState('none');
+  const [shareMsg, setShareMsg] = useState('');
+  const lastFilters = useRef(null);
+  const restoredState = useRef(null);
 
-  const handleSearchResults = useCallback((results) => {
-    setIterations(results);
+  // On mount, check for state in URL hash
+  // Don't switch view yet — wait until search completes and selections are applied
+  useEffect(function () {
+    var state = decodeState(window.location.hash);
+    if (state) {
+      restoredState.current = state;
+      if (state.groupBy) setGroupBy(state.groupBy);
+      if (state.seriesBy) setSeriesBy(state.seriesBy);
+    }
   }, []);
 
-  const toggleSelect = useCallback(
-    (iteration) => {
-      setSelected((prev) => {
-        const next = new Map(prev);
-        if (next.has(iteration.iterationId)) {
-          next.delete(iteration.iterationId);
-        } else {
-          next.set(iteration.iterationId, iteration);
-        }
-        return next;
-      });
-    },
-    [],
-  );
+  // After SearchPanel mounts, restore filters and trigger search if we have URL state
+  const searchPanelMounted = useRef(false);
+  useEffect(function () {
+    if (searchPanelMounted.current) return;
+    if (!searchRef.current || !restoredState.current) return;
+    searchPanelMounted.current = true;
+    var state = restoredState.current;
+    var filters = {
+      name: state.name || '',
+      email: state.email || '',
+      run: state.run || '',
+      benchmark: state.benchmark || '',
+      primaryMetric: state.primaryMetric || '',
+      start: state.start || '',
+      end: state.end || '',
+      tags: state.tags || [],
+      params: state.params || [],
+    };
+    searchRef.current.setFiltersAndSearch(filters);
+  });
 
-  const toggleSelectAll = useCallback(
-    (allIterations) => {
-      setSelected((prev) => {
-        const allSelected = allIterations.every((it) => prev.has(it.iterationId));
-        const next = new Map(prev);
-        if (allSelected) {
-          allIterations.forEach((it) => next.delete(it.iterationId));
-        } else {
-          allIterations.forEach((it) => next.set(it.iterationId, it));
-        }
-        return next;
+  // After search results come in, auto-select runs from URL state
+  const handleSearchResults = useCallback(function (results) {
+    setIterations(results);
+    // Save current filters for Share button (SearchPanel may not be mounted in compare view)
+    if (searchRef.current) lastFilters.current = searchRef.current.getFilters();
+    var state = restoredState.current;
+    if (state && state.selectedRuns && state.selectedRuns.length > 0) {
+      var runSet = new Set(state.selectedRuns);
+      var toSelect = new Map();
+      results.forEach(function (it) {
+        if (runSet.has(it.runId)) toSelect.set(it.iterationId, it);
       });
-    },
-    [],
-  );
+      if (toSelect.size > 0) setSelected(toSelect);
+      // Switch to the saved view now that selections are ready
+      if (state.view) setView(state.view);
+      // Clear restored state so it doesn't re-apply on next search
+      restoredState.current = null;
+    }
+  }, []);
 
-  const removeSelected = useCallback((iterationId) => {
-    setSelected((prev) => {
-      const next = new Map(prev);
+  const toggleSelect = useCallback(function (iteration) {
+    setSelected(function (prev) {
+      var next = new Map(prev);
+      if (next.has(iteration.iterationId)) {
+        next.delete(iteration.iterationId);
+      } else {
+        next.set(iteration.iterationId, iteration);
+      }
+      return next;
+    });
+  }, []);
+
+  const toggleSelectAll = useCallback(function (allIterations) {
+    setSelected(function (prev) {
+      var allSelected = allIterations.every(function (it) { return prev.has(it.iterationId); });
+      var next = new Map(prev);
+      if (allSelected) {
+        allIterations.forEach(function (it) { next.delete(it.iterationId); });
+      } else {
+        allIterations.forEach(function (it) { next.set(it.iterationId, it); });
+      }
+      return next;
+    });
+  }, []);
+
+  const removeSelected = useCallback(function (iterationId) {
+    setSelected(function (prev) {
+      var next = new Map(prev);
       next.delete(iterationId);
       return next;
     });
   }, []);
 
-  const clearSelected = useCallback(() => {
+  const clearSelected = useCallback(function () {
     setSelected(new Map());
   }, []);
+
+  function handleShare() {
+    var filters = (searchRef.current ? searchRef.current.getFilters() : null) || lastFilters.current;
+    var runIdSet = new Set();
+    selected.forEach(function (it) { runIdSet.add(it.runId); });
+    var selectedRunIds = Array.from(runIdSet);
+    var hash = encodeState(filters, selectedRunIds, view, groupBy, seriesBy);
+    var url = window.location.origin + window.location.pathname + hash;
+    // Update the URL bar so the user can see and copy it directly
+    window.history.replaceState(null, '', hash);
+    // Try clipboard, fall back to prompt
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(url).then(function () {
+        setShareMsg('Link copied!');
+        setTimeout(function () { setShareMsg(''); }, 3000);
+      }).catch(function () {
+        setShareMsg('URL updated in address bar');
+        setTimeout(function () { setShareMsg(''); }, 3000);
+      });
+    } else {
+      setShareMsg('URL updated in address bar');
+      setTimeout(function () { setShareMsg(''); }, 3000);
+    }
+  }
 
   return (
     <div className="app">
       <header className="app-header">
         <h1>Crucible</h1>
         <div className="app-header-right">
+        <button className="btn btn-sm btn-secondary" onClick={handleShare} title="Copy shareable link to clipboard">
+          {shareMsg || 'Share'}
+        </button>
         <button className="btn btn-sm btn-secondary theme-toggle" onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}>
           {theme === 'dark' ? 'Light' : 'Dark'}
         </button>
@@ -127,7 +232,7 @@ export default function App() {
       )}
 
       {view === 'compare' && (
-        <CompareView selected={selected} />
+        <CompareView selected={selected} groupBy={groupBy} setGroupBy={setGroupBy} seriesBy={seriesBy} setSeriesBy={setSeriesBy} />
       )}
 
       {view === 'deepdive' && (

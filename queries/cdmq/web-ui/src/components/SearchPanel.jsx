@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef, useMemo, useImperativeHandle, forwardRef } from 'react';
+import { useState, useCallback, useRef, useMemo, useEffect, useImperativeHandle, forwardRef } from 'react';
 import * as api from '../api/cdm';
 import { timeWork, addEntry } from '../debugLog';
 import AutocompleteInput from './AutocompleteInput';
@@ -148,7 +148,21 @@ const SearchPanel = forwardRef(function SearchPanel({ iterations, onResults, onE
   };
 
   // Expose methods for external components to add filters
+  // Allow external trigger of search (used after restoring state from URL)
+  const pendingSearch = useRef(false);
+  useEffect(function () {
+    if (pendingSearch.current) {
+      pendingSearch.current = false;
+      handleSearch();
+    }
+  }, [filters]);
+
   useImperativeHandle(ref, () => ({
+    getFilters: function () { return filters; },
+    setFiltersAndSearch: function (newFilters) {
+      setFilters(newFilters);
+      pendingSearch.current = true;
+    },
     addTagFilter: function (name, val) {
       setFilters(function (prev) {
         // Check if this exact filter already exists
