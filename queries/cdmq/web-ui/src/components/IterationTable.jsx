@@ -162,6 +162,51 @@ export default function IterationTable({ iterations, selected, onToggleSelect, o
     return parity;
   }, [sorted]);
 
+  // Compute globally unique params: params whose values differ across all displayed iterations
+  const globalUniqueParams = useMemo(() => {
+    // Collect all values per param arg across all iterations
+    var paramValues = {};
+    for (var i = 0; i < iterations.length; i++) {
+      var it = iterations[i];
+      (it.params || []).forEach(function (p) {
+        if (!paramValues[p.arg]) paramValues[p.arg] = new Set();
+        paramValues[p.arg].add(String(p.val));
+      });
+    }
+    // A param is globally unique (varying) if it has more than one distinct value
+    var varyingArgs = new Set();
+    Object.keys(paramValues).forEach(function (arg) {
+      if (paramValues[arg].size > 1) varyingArgs.add(arg);
+    });
+    // Also do the same for tags
+    var tagValues = {};
+    for (var i = 0; i < iterations.length; i++) {
+      var it = iterations[i];
+      (it.tags || []).forEach(function (t) {
+        if (!tagValues[t.name]) tagValues[t.name] = new Set();
+        tagValues[t.name].add(t.val);
+      });
+    }
+    var varyingTags = new Set();
+    Object.keys(tagValues).forEach(function (name) {
+      if (tagValues[name].size > 1) varyingTags.add(name);
+    });
+    // Build per-iteration list of varying params and tags
+    var result = {};
+    for (var i = 0; i < iterations.length; i++) {
+      var it = iterations[i];
+      var varying = [];
+      (it.params || []).forEach(function (p) {
+        if (varyingArgs.has(p.arg)) varying.push({ key: p.arg, val: p.val, type: 'param' });
+      });
+      (it.tags || []).forEach(function (t) {
+        if (varyingTags.has(t.name)) varying.push({ key: t.name, val: t.val, type: 'tag' });
+      });
+      result[it.iterationId] = varying;
+    }
+    return result;
+  }, [iterations]);
+
   return (
     <div className="results-panel">
       <div className="results-header">
@@ -212,7 +257,7 @@ export default function IterationTable({ iterations, selected, onToggleSelect, o
                 Benchmark
               </th>
               <th>Tags</th>
-              <th>Unique Params</th>
+              <th>Unique Params/Tags</th>
               <th className={thClass('metric')} onClick={() => handleSort('metric')}>
                 Primary Metric
               </th>
@@ -284,17 +329,14 @@ export default function IterationTable({ iterations, selected, onToggleSelect, o
                     {(!it.tags || it.tags.length === 0) && '-'}
                   </td>
                   <td>
-                    {it.uniqueParams.length > 0
-                      ? it.uniqueParams.map((p, i) => (
-                          <span key={i} className="param">
-                            {p.arg}={p.val}
+                    {(globalUniqueParams[it.iterationId] || []).length > 0
+                      ? (globalUniqueParams[it.iterationId] || []).map((p, i) => (
+                          <span key={i} className={p.type === 'tag' ? 'tag' : 'param'}>
+                            {p.type === 'tag' && <span className="tag-key">{p.key}</span>}
+                            {p.type === 'tag' ? '=' + p.val : p.key + '=' + p.val}
                           </span>
                         ))
-                      : it.params.map((p, i) => (
-                          <span key={i} className="param param-common">
-                            {p.arg}={p.val}
-                          </span>
-                        ))}
+                      : '-'}
                   </td>
                   <td className="metric-value">
                     {formatMetric(it.primaryMetric)}
