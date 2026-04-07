@@ -24,6 +24,7 @@ function defaultEnd() {
 
 export default function SearchPanel({ iterations, onResults, onError, loading, setLoading }) {
   const presentValues = useMemo(() => {
+    var runIds = new Set();
     var benchmarks = new Set();
     var primaryMetrics = new Set();
     var names = new Set();
@@ -34,6 +35,7 @@ export default function SearchPanel({ iterations, onResults, onError, loading, s
     var paramValues = {};
     if (iterations && iterations.length > 0) {
       for (var it of iterations) {
+        if (it.runId) runIds.add(it.runId);
         if (it.benchmark) benchmarks.add(it.benchmark);
         if (it.primaryMetric) primaryMetrics.add(it.primaryMetric);
         if (it.runName) names.add(it.runName);
@@ -50,7 +52,7 @@ export default function SearchPanel({ iterations, onResults, onError, loading, s
         }
       }
     }
-    return { benchmarks, primaryMetrics, names, emails, tagNames, tagValues, paramArgs, paramValues };
+    return { runIds, benchmarks, primaryMetrics, names, emails, tagNames, tagValues, paramArgs, paramValues };
   }, [iterations]);
 
   const [filters, setFilters] = useState({
@@ -69,6 +71,7 @@ export default function SearchPanel({ iterations, onResults, onError, loading, s
   const optionsCache = useRef({});
   const [options, setOptions] = useState({
     months: null,
+    runIds: null,
     benchmarks: null,
     names: null,
     emails: null,
@@ -233,14 +236,17 @@ export default function SearchPanel({ iterations, onResults, onError, loading, s
 
       {/* Basic filters */}
       <div className="search-fields">
-        <div className="field">
+        <div className="field" style={{ gridColumn: '1 / -1' }}>
           <label>Run ID</label>
-          <input
-            type="text"
-            placeholder="UUID"
+          <AutocompleteInput
             value={filters.run}
-            onChange={(e) => updateFilter('run', e.target.value)}
+            onChange={(v) => updateFilter('run', v)}
+            options={options.runIds || []}
+            presentValues={presentValues.runIds}
+            placeholder="UUID"
+            onFocus={() => loadOptions('runIds', 'run-ids')}
             onKeyDown={handleKeyDown}
+            multi
           />
         </div>
         <div className="field">
@@ -291,29 +297,29 @@ export default function SearchPanel({ iterations, onResults, onError, loading, s
             onKeyDown={handleKeyDown}
           />
         </div>
-        <div className="field">
-          <label>From (YYYY.MM)</label>
-          <AutocompleteInput
-            value={filters.start}
-            onChange={(v) => updateFilter('start', v)}
-            options={options.months || []}
-            presentValues={new Set()}
-            placeholder="e.g. 2025.01"
-            onFocus={() => loadOptions('months', 'months')}
-            onKeyDown={handleKeyDown}
-          />
-        </div>
-        <div className="field">
-          <label>To (YYYY.MM)</label>
-          <AutocompleteInput
-            value={filters.end}
-            onChange={(v) => updateFilter('end', v)}
-            options={options.months || []}
-            presentValues={new Set()}
-            placeholder="e.g. 2025.04"
-            onFocus={() => loadOptions('months', 'months')}
-            onKeyDown={handleKeyDown}
-          />
+        <div className="field field-date-range">
+          <label>Date Range</label>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <AutocompleteInput
+              value={filters.start}
+              onChange={(v) => updateFilter('start', v)}
+              options={options.months || []}
+              presentValues={new Set()}
+              placeholder="From"
+              onFocus={() => loadOptions('months', 'months')}
+              onKeyDown={handleKeyDown}
+            />
+            <span style={{ color: 'var(--text-secondary)' }}>to</span>
+            <AutocompleteInput
+              value={filters.end}
+              onChange={(v) => updateFilter('end', v)}
+              options={options.months || []}
+              presentValues={new Set()}
+              placeholder="To"
+              onFocus={() => loadOptions('months', 'months')}
+              onKeyDown={handleKeyDown}
+            />
+          </div>
         </div>
       </div>
 

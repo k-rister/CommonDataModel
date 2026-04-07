@@ -47,13 +47,56 @@ function formatDimValue(dim, val) {
   return val || '(empty)';
 }
 
-function buildIterLabel(it) {
+// Compute which params and tags are common (same value across all iterations)
+// vs varying (different values). Returns { common: [{key,val}], varyingKeys: Set }
+function computeCommonVarying(iters) {
+  if (iters.length === 0) return { common: [], varyingKeys: new Set() };
+
+  // Collect all param arg values and tag name values across iterations
+  var paramValues = {}; // arg -> Set of values
+  var tagValues = {};   // name -> Set of values
+
+  iters.forEach(function (it) {
+    (it.params || []).forEach(function (p) {
+      if (!paramValues[p.arg]) paramValues[p.arg] = new Set();
+      paramValues[p.arg].add(String(p.val));
+    });
+    (it.tags || []).forEach(function (t) {
+      if (!tagValues[t.name]) tagValues[t.name] = new Set();
+      tagValues[t.name].add(t.val);
+    });
+  });
+
+  var common = [];
+  var varyingKeys = new Set();
+
+  Object.keys(paramValues).sort().forEach(function (arg) {
+    if (paramValues[arg].size === 1) {
+      common.push({ key: arg, val: Array.from(paramValues[arg])[0] });
+    } else {
+      varyingKeys.add('param:' + arg);
+    }
+  });
+  Object.keys(tagValues).sort().forEach(function (name) {
+    if (tagValues[name].size === 1) {
+      common.push({ key: name, val: Array.from(tagValues[name])[0] });
+    } else {
+      varyingKeys.add('tag:' + name);
+    }
+  });
+
+  return { common: common, varyingKeys: varyingKeys };
+}
+
+// Build label from an iteration showing only varying params and tags
+function buildIterLabel(it, varyingKeys) {
   var parts = [];
-  if (it.uniqueParams && it.uniqueParams.length > 0) {
-    parts = it.uniqueParams.map(function (p) { return p.arg + '=' + p.val; });
-  } else if (it.params && it.params.length > 0) {
-    parts = it.params.slice(0, 3).map(function (p) { return p.arg + '=' + p.val; });
-  }
+  (it.params || []).forEach(function (p) {
+    if (varyingKeys.has('param:' + p.arg)) parts.push(p.arg + '=' + p.val);
+  });
+  (it.tags || []).forEach(function (t) {
+    if (varyingKeys.has('tag:' + t.name)) parts.push(t.name + '=' + t.val);
+  });
   return parts.join(', ') || it.iterationId.substring(0, 8);
 }
 
@@ -75,6 +118,41 @@ function naturalCompare(a, b) {
   if (a < b) return -1;
   if (a > b) return 1;
   return 0;
+}
+
+// Custom X-axis tick that wraps long labels into multiple lines
+function WrappedAxisTick(props) {
+  var x = props.x, y = props.y, payload = props.payload;
+  if (!payload || !payload.value) return null;
+  // Split on ", " to get individual param=val segments
+  var segments = String(payload.value).split(', ');
+  // Group into lines of ~30 chars
+  var lines = [];
+  var current = '';
+  for (var i = 0; i < segments.length; i++) {
+    if (current && (current + ', ' + segments[i]).length > 30) {
+      lines.push(current);
+      current = segments[i];
+    } else {
+      current = current ? current + ', ' + segments[i] : segments[i];
+    }
+  }
+  if (current) lines.push(current);
+
+  return (
+    <g transform={'translate(' + x + ',' + y + ')'}>
+      <text
+        textAnchor="end"
+        fontSize={11}
+        fill="var(--text-secondary)"
+        transform="rotate(-30)"
+      >
+        {lines.map(function (line, li) {
+          return <tspan key={li} x={0} dy={li === 0 ? 0 : 14}>{line}</tspan>;
+        })}
+      </text>
+    </g>
+  );
 }
 
 function buildDimOptions(iterations) {
@@ -146,6 +224,11 @@ export default function CompareView({ selected }) {
     Object.keys(byMetric).forEach(function (metricName) {
       var iters = byMetric[metricName];
 
+      // Compute common vs varying params/tags across these iterations
+      var cv = computeCommonVarying(iters);
+      var varyingKeys = cv.varyingKeys;
+      var commonItems = cv.common;
+
       // Sort by group-by value, then series-by value (natural/numeric sort)
       var sorted = iters.slice().sort(function (a, b) {
         var cmp = naturalCompare(getDimValue(a, groupBy), getDimValue(b, groupBy));
@@ -189,12 +272,8 @@ export default function CompareView({ selected }) {
         var stddev = computeStddev(mv);
         var sv = getDimValue(it, seriesBy);
 
-        // Build label: show iteration-specific info (not the group-by dim since that's shared)
-        var label = buildIterLabel(it);
-        if (groupBy !== 'none') {
-          // Add group label prefix for the first item in each group
-          var isFirst = chartData.length === 0 || chartData[chartData.length - 1].isGap || chartData[chartData.length - 1].groupValue !== gv;
-        }
+        // Build label from varying params/tags only
+        var label = buildIterLabel(it, varyingKeys);
 
         chartData.push({
           name: label,
@@ -236,7 +315,7 @@ export default function CompareView({ selected }) {
         });
       }
 
-      result.push({ metricName: metricName, data: chartData, legendData: legendData, groupLabels: groupLabels });
+      result.push({ metricName: metricName, data: chartData, legendData: legendData, groupLabels: groupLabels, commonItems: commonItems });
     });
 
     return result;
@@ -291,6 +370,11 @@ export default function CompareView({ selected }) {
         return (
           <div key={ci} className="compare-chart-panel">
             <h3>{chart.metricName}</h3>
+            {chart.commonItems.length > 0 && (
+              <div className="compare-subtitle">
+                {chart.commonItems.map(function (c) { return c.key + '=' + c.val; }).join(', ')}
+              </div>
+            )}
 
             {chart.legendData.length > 0 && (
               <div className="compare-legend">
@@ -314,15 +398,14 @@ export default function CompareView({ selected }) {
             )}
 
             <ResponsiveContainer width="100%" height={chartHeight}>
-              <BarChart data={chart.data} margin={{ top: 20, right: 30, left: 60, bottom: 80 }} barCategoryGap="10%">
+              <BarChart data={chart.data} margin={{ top: 20, right: 30, left: 60, bottom: 120 }} barCategoryGap="10%">
                 <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
                 <XAxis
                   dataKey="name"
-                  angle={-30}
-                  textAnchor="end"
-                  height={80}
-                  tick={{ fontSize: 11, fill: 'var(--text-secondary)' }}
+                  height={120}
+                  tick={<WrappedAxisTick />}
                   stroke="var(--border)"
+                  interval={0}
                 />
                 <YAxis
                   tick={{ fontSize: 12, fill: 'var(--text-secondary)' }}
@@ -336,25 +419,34 @@ export default function CompareView({ selected }) {
                   }}
                 />
                 <Tooltip
-                  contentStyle={{
-                    background: 'var(--surface)',
-                    border: '1px solid var(--border)',
-                    borderRadius: 'var(--radius)',
-                    color: 'var(--text)',
-                  }}
-                  formatter={function (value, name, props) {
-                    if (value == null) return ['-', ''];
-                    var entry = props.payload;
-                    var text = formatValue(value);
+                  content={function (props) {
+                    if (!props.active || !props.payload || props.payload.length === 0) return null;
+                    var entry = props.payload[0].payload;
+                    if (!entry || entry.isGap || entry.value == null) return null;
+                    var text = formatValue(entry.value);
                     if (entry.samples > 1 && entry.stddevPct != null) {
                       text += ' (\u00b1' + entry.stddevPct.toFixed(1) + '%)';
                     }
-                    var seriesInfo = entry.seriesValue && entry.seriesValue !== '__all__'
-                      ? formatDimLabel(seriesBy) + '=' + formatDimValue(seriesBy, entry.seriesValue) : '';
-                    var groupInfo = entry.groupValue && entry.groupValue !== '__all__'
-                      ? formatDimLabel(groupBy) + '=' + formatDimValue(groupBy, entry.groupValue) : '';
-                    var subtitle = [groupInfo, seriesInfo].filter(Boolean).join(', ');
-                    return [text + (subtitle ? ' [' + subtitle + ']' : ''), chart.metricName];
+                    var lines = [];
+                    if (entry.name) lines.push(entry.name);
+                    if (entry.groupValue && entry.groupValue !== '__all__')
+                      lines.push(formatDimLabel(groupBy) + ': ' + formatDimValue(groupBy, entry.groupValue));
+                    if (entry.seriesValue && entry.seriesValue !== '__all__')
+                      lines.push(formatDimLabel(seriesBy) + ': ' + formatDimValue(seriesBy, entry.seriesValue));
+                    return (
+                      <div style={{
+                        background: 'var(--surface)', border: '1px solid var(--border)',
+                        borderRadius: 'var(--radius)', padding: '8px 12px', color: 'var(--text)',
+                        fontSize: 12, boxShadow: 'var(--shadow)',
+                      }}>
+                        {lines.map(function (l, i) {
+                          return <div key={i} style={{ color: i === 0 ? 'var(--text)' : 'var(--text-secondary)', marginBottom: 2 }}>{l}</div>;
+                        })}
+                        <div style={{ fontWeight: 600, color: entry.color, marginTop: 4 }}>
+                          {chart.metricName}: {text}
+                        </div>
+                      </div>
+                    );
                   }}
                 />
                 <Bar dataKey="value" radius={[4, 4, 0, 0]}>

@@ -149,9 +149,17 @@ app.get('/api/v1/runs', async (req, res) => {
       termKeys.push('run.email');
       values.push([req.query.email]);
     }
+    // Run ID filter: supports comma-separated values for multi-select
+    var runIdFilter = null;
     if (req.query.run) {
-      termKeys.push('run.run-uuid');
-      values.push([req.query.run]);
+      var runIds = req.query.run.split(',').filter(Boolean);
+      if (runIds.length === 1) {
+        termKeys.push('run.run-uuid');
+        values.push([runIds[0]]);
+      } else {
+        // Multiple run IDs: filter results after the query
+        runIdFilter = new Set(runIds);
+      }
     }
     if (req.query.harness) {
       termKeys.push('run.harness');
@@ -187,6 +195,11 @@ app.get('/api/v1/runs', async (req, res) => {
     var runIds = cdm.consolidateAllArrays(allInstanceRunIds);
     if (typeof runIds == 'undefined') {
       runIds = [];
+    }
+
+    // Apply multi-run-ID filter if specified
+    if (runIdFilter) {
+      runIds = runIds.filter(function (id) { return runIdFilter.has(id); });
     }
 
     // Helper: get run IDs from a cross-index aggregation and intersect with current set
@@ -1042,6 +1055,19 @@ app.get('/api/v1/fields/months', async (req, res) => {
   } catch (error) {
     serverError('Error in GET /api/v1/fields/months: ' + error);
     res.status(500).json({ code: 'INTERNAL_ERROR', error: 'Failed to get months: ' + error.message });
+  }
+});
+
+app.get('/api/v1/fields/run-ids', async (req, res) => {
+  try {
+    var values = await getDistinctValues(instances, (inst) =>
+      cdm.getDistinctRunIds(inst, getYdm(inst, 'run', req))
+    );
+    serverLog('GET /api/v1/fields/run-ids returned ' + values.length + ' value(s)');
+    res.json({ values: values });
+  } catch (error) {
+    serverError('Error in GET /api/v1/fields/run-ids: ' + error);
+    res.status(500).json({ code: 'INTERNAL_ERROR', error: 'Failed to get run IDs: ' + error.message });
   }
 });
 

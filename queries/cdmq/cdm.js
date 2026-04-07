@@ -1479,6 +1479,12 @@ getDistinctEmails = async function (instance, yearDotMonth) {
 exports.getDistinctEmails = getDistinctEmails;
 
 // --------------------------------------------------------------------------------------------------------------
+getDistinctRunIds = async function (instance, yearDotMonth) {
+  return await mSearch(instance, 'run', yearDotMonth, [], [], null, { source: { terms: { field: 'run.run-uuid', size: 10000 } } }, 0);
+};
+exports.getDistinctRunIds = getDistinctRunIds;
+
+// --------------------------------------------------------------------------------------------------------------
 getDistinctBenchmarks = async function (instance, yearDotMonth) {
   return await mSearch(instance, 'run', yearDotMonth, [], [], null, { source: { terms: { field: 'run.benchmark', size: 10000 } } }, 0);
 };
