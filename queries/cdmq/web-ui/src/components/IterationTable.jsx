@@ -151,15 +151,27 @@ export default function IterationTable({ iterations, selected, onToggleSelect, o
 
   const allOnPageSelected = sorted.length > 0 && sorted.every((it) => selected.has(it.iterationId));
 
-  // Precompute run group parity for each row (0 or 1, toggling when runId changes)
-  const runGroupParity = useMemo(() => {
+  // Precompute run group parity and rowSpan info
+  const { runGroupParity, runGroupSpan } = useMemo(() => {
     var parity = [];
+    var span = []; // null = skip cell, number = rowSpan for this cell
     var current = 0;
+    var groupStart = 0;
     for (var i = 0; i < sorted.length; i++) {
-      if (i > 0 && sorted[i].runId !== sorted[i - 1].runId) current = 1 - current;
+      if (i > 0 && sorted[i].runId !== sorted[i - 1].runId) {
+        current = 1 - current;
+        // Set the span for the group that just ended
+        span[groupStart] = i - groupStart;
+        groupStart = i;
+      }
       parity.push(current);
+      span.push(null);
     }
-    return parity;
+    // Final group
+    if (sorted.length > 0) {
+      span[groupStart] = sorted.length - groupStart;
+    }
+    return { runGroupParity: parity, runGroupSpan: span };
   }, [sorted]);
 
   // Compute globally varying vs common params and tags across all displayed iterations
@@ -242,6 +254,9 @@ export default function IterationTable({ iterations, selected, onToggleSelect, o
         <table className="results-table">
           <thead>
             <tr>
+              <th className={thClass('run')} onClick={() => handleSort('run')}>
+                Run
+              </th>
               <th>
                 <input
                   type="checkbox"
@@ -249,12 +264,6 @@ export default function IterationTable({ iterations, selected, onToggleSelect, o
                   onChange={() => onToggleSelectAll(sorted)}
                   disabled={sorted.length === 0}
                 />
-              </th>
-              <th className={thClass('run')} onClick={() => handleSort('run')}>
-                Run
-              </th>
-              <th className={thClass('date')} onClick={() => handleSort('date')}>
-                Date
               </th>
               <th className={thClass('benchmark')} onClick={() => handleSort('benchmark')}>
                 Benchmark
@@ -275,21 +284,21 @@ export default function IterationTable({ iterations, selected, onToggleSelect, o
           <tbody>
             {loading && (
               <tr className="loading-row">
-                <td colSpan={9}>
+                <td colSpan={8}>
                   <span className="spinner" /> Loading iterations...
                 </td>
               </tr>
             )}
             {!loading && sorted.length === 0 && iterations.length === 0 && (
               <tr className="loading-row">
-                <td colSpan={9}>
+                <td colSpan={8}>
                   <span className="empty-msg">Search for runs to see iterations.</span>
                 </td>
               </tr>
             )}
             {!loading && sorted.length === 0 && iterations.length > 0 && (
               <tr className="loading-row">
-                <td colSpan={9}>
+                <td colSpan={8}>
                   <span className="empty-msg">No iterations match the current filter.</span>
                 </td>
               </tr>
@@ -307,6 +316,24 @@ export default function IterationTable({ iterations, selected, onToggleSelect, o
                   onClick={() => onToggleSelect(it)}
                   style={{ cursor: 'pointer' }}
                 >
+                  {runGroupSpan[idx] != null && (
+                    <td rowSpan={runGroupSpan[idx]} className="run-id-cell" onClick={(e) => e.stopPropagation()}>
+                      {buildRunUrl(it.runSource) ? (
+                        <a className="run-id" href={buildRunUrl(it.runSource)} target="_blank" rel="noopener noreferrer">{it.runId}</a>
+                      ) : (
+                        <span className="run-id">{it.runId}</span>
+                      )}
+                      <div className="run-date">{formatDate(it.runBegin)}</div>
+                      <div style={{ marginTop: 4 }}>
+                        <input
+                          type="checkbox"
+                          checked={sorted.slice(idx, idx + runGroupSpan[idx]).every(function (r) { return selected.has(r.iterationId); })}
+                          onChange={function () { onToggleSelectAll(sorted.slice(idx, idx + runGroupSpan[idx])); }}
+                          title="Select all iterations in this run"
+                        />
+                      </div>
+                    </td>
+                  )}
                   <td onClick={(e) => e.stopPropagation()}>
                     <input
                       type="checkbox"
@@ -314,14 +341,6 @@ export default function IterationTable({ iterations, selected, onToggleSelect, o
                       onChange={() => onToggleSelect(it)}
                     />
                   </td>
-                  <td>
-                    {buildRunUrl(it.runSource) ? (
-                      <a className="run-id" href={buildRunUrl(it.runSource)} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()}>{it.runId}</a>
-                    ) : (
-                      <span className="run-id">{it.runId}</span>
-                    )}
-                  </td>
-                  <td className="run-date">{formatDate(it.runBegin)}</td>
                   <td>{it.benchmark || '-'}</td>
                   <td>
                     {(globalCommon[it.iterationId] || []).length > 0

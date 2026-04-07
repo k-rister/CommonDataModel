@@ -499,6 +499,11 @@ body {
   font-size: 12px;
 }
 
+.run-id-cell {
+  vertical-align: middle;
+  border-right: 2px solid var(--border-strong);
+}
+
 a.run-id {
   color: var(--accent);
   text-decoration: none;
