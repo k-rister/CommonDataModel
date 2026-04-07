@@ -1,5 +1,5 @@
-import { useState, useEffect, useMemo } from 'react';
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ErrorBar, ResponsiveContainer, Legend, Cell, ReferenceLine } from 'recharts';
+import { useState, useEffect, useMemo, useCallback } from 'react';
+import { ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip, ErrorBar, ResponsiveContainer, Legend, Cell } from 'recharts';
 import * as api from '../api/cdm';
 import { timeWork } from '../debugLog';
 
@@ -8,6 +8,8 @@ const COLORS = [
   '#34d399', '#fb923c', '#f472b6', '#38bdf8', '#facc15',
   '#818cf8', '#2dd4bf', '#e879f9', '#f97316', '#a3e635',
 ];
+
+const SUPP_COLORS = ['#f97316', '#e879f9', '#14b8a6', '#ef4444', '#8b5cf6', '#06b6d4'];
 
 function formatValue(v) {
   if (v == null) return '';
@@ -259,13 +261,20 @@ function buildDimOptions(iterations) {
 export default function CompareView({ selected, groupBy, setGroupBy, seriesBy, setSeriesBy }) {
   var [metricValues, setMetricValues] = useState({});
   var [loading, setLoading] = useState(false);
+  var [supplementalMetrics, setSupplementalMetrics] = useState([]); // [{ source, type, values: {iterId: {mean,...}} }]
+  var [availableSources, setAvailableSources] = useState(null);
+  var [availableTypes, setAvailableTypes] = useState(null);
+  var [addMetricSource, setAddMetricSource] = useState('');
+  var [addMetricType, setAddMetricType] = useState('');
+  var [addMetricLoading, setAddMetricLoading] = useState(false);
+  var [showAddMetric, setShowAddMetric] = useState(false);
 
   var iterations = useMemo(function () {
     return Array.from(selected.values());
   }, [selected]);
 
-  useEffect(function () {
-    if (iterations.length === 0) return;
+  // Helper to get run IDs and date range from iterations
+  function getRunContext() {
     var runIdSet = new Set();
     iterations.forEach(function (it) { runIdSet.add(it.runId); });
     var runIds = Array.from(runIdSet);
@@ -274,10 +283,16 @@ export default function CompareView({ selected, groupBy, setGroupBy, seriesBy, s
     var endDate = begins.length > 0 ? new Date(Math.max.apply(null, begins)) : null;
     var start = startDate ? startDate.getFullYear() + '.' + String(startDate.getMonth() + 1).padStart(2, '0') : null;
     var end = endDate ? endDate.getFullYear() + '.' + String(endDate.getMonth() + 1).padStart(2, '0') : null;
+    return { runIds: runIds, start: start, end: end };
+  }
 
+  useEffect(function () {
+    if (iterations.length === 0) return;
+    var ctx = getRunContext();
     setLoading(true);
+    setSupplementalMetrics([]);
     timeWork('Fetch metric values for compare (' + iterations.length + ' iterations)', function () {
-      return api.getIterationMetricValues(runIds, start, end);
+      return api.getIterationMetricValues(ctx.runIds, ctx.start, ctx.end);
     }).then(function (res) {
       setMetricValues(res.values || {});
     }).catch(function (err) {
@@ -290,6 +305,56 @@ export default function CompareView({ selected, groupBy, setGroupBy, seriesBy, s
   var dimOptions = useMemo(function () {
     return buildDimOptions(iterations);
   }, [iterations]);
+
+  var handleShowAddMetric = useCallback(function () {
+    setShowAddMetric(true);
+    setAddMetricSource('');
+    setAddMetricType('');
+    setAvailableTypes(null);
+    if (!availableSources) {
+      var ctx = getRunContext();
+      api.getIterationMetricSources(ctx.runIds, ctx.start, ctx.end).then(function (res) {
+        setAvailableSources(res.sources || []);
+      });
+    }
+  }, [iterations, availableSources]);
+
+  var handleSourceChange = useCallback(function (source) {
+    setAddMetricSource(source);
+    setAddMetricType('');
+    setAvailableTypes(null);
+    if (source) {
+      var ctx = getRunContext();
+      api.getIterationMetricTypes(ctx.runIds, ctx.start, ctx.end, source).then(function (res) {
+        setAvailableTypes(res.types || []);
+      });
+    }
+  }, [iterations]);
+
+  var handleAddMetric = useCallback(function () {
+    if (!addMetricSource || !addMetricType) return;
+    // Check if already added
+    var exists = supplementalMetrics.some(function (m) { return m.source === addMetricSource && m.type === addMetricType; });
+    if (exists) { setShowAddMetric(false); return; }
+    var ctx = getRunContext();
+    setAddMetricLoading(true);
+    timeWork('Fetch ' + addMetricSource + '::' + addMetricType, function () {
+      return api.getSupplementalMetric(ctx.runIds, ctx.start, ctx.end, addMetricSource, addMetricType);
+    }).then(function (res) {
+      setSupplementalMetrics(function (prev) {
+        return prev.concat([{ source: addMetricSource, type: addMetricType, values: res.values || {} }]);
+      });
+      setShowAddMetric(false);
+    }).catch(function (err) {
+      console.error('Failed to fetch supplemental metric:', err);
+    }).finally(function () {
+      setAddMetricLoading(false);
+    });
+  }, [iterations, addMetricSource, addMetricType, supplementalMetrics]);
+
+  var handleRemoveMetric = useCallback(function (idx) {
+    setSupplementalMetrics(function (prev) { return prev.filter(function (_, i) { return i !== idx; }); });
+  }, []);
 
   // Build chart data: one entry per iteration, sorted/grouped, with gaps between groups
   var charts = useMemo(function () {
@@ -394,7 +459,7 @@ export default function CompareView({ selected, groupBy, setGroupBy, seriesBy, s
         if (groupCommon) groupCommon.forEach(function (k) { excludeKeys.add(k); });
         var label = buildIterLabel(it, varyingKeys, excludeKeys);
 
-        chartData.push({
+        var entry = {
           name: label,
           value: mean,
           errorY: stddev,
@@ -405,7 +470,13 @@ export default function CompareView({ selected, groupBy, setGroupBy, seriesBy, s
           seriesValue: sv,
           color: seriesBy !== 'none' ? seriesColorMap[sv] : COLORS[i % COLORS.length],
           isGap: false,
+        };
+        // Add supplemental metric values
+        supplementalMetrics.forEach(function (sm, si) {
+          var smv = sm.values[it.iterationId];
+          entry['supp_' + si] = smv ? smv.mean : null;
         });
+        chartData.push(entry);
       }
 
       // Build legend entries for series
@@ -455,7 +526,7 @@ export default function CompareView({ selected, groupBy, setGroupBy, seriesBy, s
     });
 
     return result;
-  }, [iterations, metricValues, groupBy, seriesBy]);
+  }, [iterations, metricValues, groupBy, seriesBy, supplementalMetrics]);
 
   if (loading) {
     return (
@@ -488,7 +559,51 @@ export default function CompareView({ selected, groupBy, setGroupBy, seriesBy, s
             {dimOptions.map(function (o) { return <option key={o.value} value={o.value}>{o.label}</option>; })}
           </select>
         </div>
+        <div className="compare-control-spacer" />
+        {!showAddMetric && (
+          <button className="btn btn-sm btn-secondary" onClick={handleShowAddMetric}>
+            + Add Metric
+          </button>
+        )}
+        {showAddMetric && (
+          <div className="compare-control">
+            <label>Source</label>
+            <select value={addMetricSource} onChange={function (e) { handleSourceChange(e.target.value); }}>
+              <option value="">Select...</option>
+              {(availableSources || []).map(function (s) { return <option key={s} value={s}>{s}</option>; })}
+            </select>
+          </div>
+        )}
+        {showAddMetric && addMetricSource && (
+          <div className="compare-control">
+            <label>Type</label>
+            <select value={addMetricType} onChange={function (e) { setAddMetricType(e.target.value); }}>
+              <option value="">Select...</option>
+              {(availableTypes || []).map(function (t) { return <option key={t} value={t}>{t}</option>; })}
+            </select>
+          </div>
+        )}
+        {showAddMetric && addMetricSource && addMetricType && (
+          <button className="btn btn-sm btn-primary" onClick={handleAddMetric} disabled={addMetricLoading}>
+            {addMetricLoading ? <><span className="spinner" style={{ marginRight: 4 }} /> Loading...</> : 'Add'}
+          </button>
+        )}
+        {showAddMetric && (
+          <button className="btn btn-sm btn-secondary" onClick={function () { setShowAddMetric(false); }}>Cancel</button>
+        )}
       </div>
+      {supplementalMetrics.length > 0 && (
+        <div className="compare-supp-list">
+          {supplementalMetrics.map(function (sm, si) {
+            return (
+              <span key={si} className="compare-supp-chip" style={{ borderColor: SUPP_COLORS[si % SUPP_COLORS.length], color: SUPP_COLORS[si % SUPP_COLORS.length] }}>
+                {sm.source}::{sm.type}
+                <button onClick={function () { handleRemoveMetric(si); }}>&times;</button>
+              </span>
+            );
+          })}
+        </div>
+      )}
 
       {charts.map(function (chart, ci) {
         var nonGapData = chart.data.filter(function (d) { return !d.isGap; });
@@ -541,7 +656,7 @@ export default function CompareView({ selected, groupBy, setGroupBy, seriesBy, s
             )}
 
             <ResponsiveContainer width="100%" height={chartHeight}>
-              <BarChart data={chart.data} margin={{ top: 20, right: 30, left: 60, bottom: 120 }} barCategoryGap="10%">
+              <ComposedChart data={chart.data} margin={{ top: 20, right: supplementalMetrics.length > 0 ? 60 : 30, left: 60, bottom: 120 }} barCategoryGap="10%">
                 <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
                 <XAxis
                   dataKey="name"
@@ -551,6 +666,7 @@ export default function CompareView({ selected, groupBy, setGroupBy, seriesBy, s
                   interval={0}
                 />
                 <YAxis
+                  yAxisId="left"
                   tick={{ fontSize: 12, fill: 'var(--text-secondary)' }}
                   stroke="var(--border)"
                   label={{
@@ -561,11 +677,41 @@ export default function CompareView({ selected, groupBy, setGroupBy, seriesBy, s
                     style: { fontSize: 13, fill: 'var(--text-secondary)' },
                   }}
                 />
+                {supplementalMetrics.length > 0 && (function () {
+                  // Compute domain from actual supplemental values
+                  var allVals = [];
+                  chart.data.forEach(function (d) {
+                    if (d.isGap) return;
+                    supplementalMetrics.forEach(function (sm, si) {
+                      var v = d['supp_' + si];
+                      if (v != null) allVals.push(v);
+                    });
+                  });
+                  var min = allVals.length > 0 ? Math.min.apply(null, allVals) : 0;
+                  var max = allVals.length > 0 ? Math.max.apply(null, allVals) : 1;
+                  var pad = (max - min) * 0.1 || 0.1;
+                  return (
+                    <YAxis
+                      yAxisId="right"
+                      orientation="right"
+                      domain={[Math.max(0, min - pad), max + pad]}
+                      tick={{ fontSize: 12, fill: 'var(--text-secondary)' }}
+                      stroke="var(--border)"
+                      label={{
+                        value: supplementalMetrics.map(function (m) { return m.source + '::' + m.type; }).join(', '),
+                        angle: 90,
+                        position: 'insideRight',
+                        offset: -45,
+                        style: { fontSize: 13, fill: 'var(--text-secondary)' },
+                      }}
+                    />
+                  );
+                })()}
                 <Tooltip
                   content={function (props) {
                     if (!props.active || !props.payload || props.payload.length === 0) return null;
                     var entry = props.payload[0].payload;
-                    if (!entry || entry.isGap || entry.isGroupLabel || entry.value == null) return null;
+                    if (!entry || entry.isGap || entry.value == null) return null;
                     var text = formatValue(entry.value);
                     if (entry.samples > 1 && entry.stddevPct != null) {
                       text += ' (\u00b1' + entry.stddevPct.toFixed(1) + '%)';
@@ -576,6 +722,16 @@ export default function CompareView({ selected, groupBy, setGroupBy, seriesBy, s
                       lines.push(formatDimLabel(groupBy) + ': ' + formatDimValue(groupBy, entry.groupValue));
                     if (entry.seriesValue && entry.seriesValue !== '__all__')
                       lines.push(formatDimLabel(seriesBy) + ': ' + formatDimValue(seriesBy, entry.seriesValue));
+                    var metricLines = [];
+                    metricLines.push({ label: chart.metricName, value: text, color: entry.color });
+                    supplementalMetrics.forEach(function (sm, si) {
+                      var sv = entry['supp_' + si];
+                      metricLines.push({
+                        label: sm.source + '::' + sm.type,
+                        value: sv != null ? formatValue(sv) : 'no data',
+                        color: SUPP_COLORS[si % SUPP_COLORS.length],
+                      });
+                    });
                     return (
                       <div style={{
                         background: 'var(--surface)', border: '1px solid var(--border)',
@@ -585,20 +741,35 @@ export default function CompareView({ selected, groupBy, setGroupBy, seriesBy, s
                         {lines.map(function (l, i) {
                           return <div key={i} style={{ color: i === 0 ? 'var(--text)' : 'var(--text-secondary)', marginBottom: 2 }}>{l}</div>;
                         })}
-                        <div style={{ fontWeight: 600, color: entry.color, marginTop: 4 }}>
-                          {chart.metricName}: {text}
-                        </div>
+                        {metricLines.map(function (ml, i) {
+                          return <div key={'m' + i} style={{ fontWeight: 600, color: ml.color, marginTop: i === 0 ? 4 : 2 }}>{ml.label}: {ml.value}</div>;
+                        })}
                       </div>
                     );
                   }}
                 />
-                <Bar dataKey="value" radius={[4, 4, 0, 0]}>
+                <Bar dataKey="value" yAxisId="left" radius={[4, 4, 0, 0]}>
                   <ErrorBar dataKey="errorY" width={4} strokeWidth={2} stroke="var(--text-secondary)" />
                   {chart.data.map(function (entry, idx) {
-                    return <Cell key={idx} fill={entry.isGap || entry.isGroupLabel ? 'transparent' : entry.color} />;
+                    return <Cell key={idx} fill={entry.isGap ? 'transparent' : entry.color} />;
                   })}
                 </Bar>
-              </BarChart>
+                {supplementalMetrics.map(function (sm, si) {
+                  return (
+                    <Line
+                      key={si}
+                      dataKey={'supp_' + si}
+                      yAxisId="right"
+                      type="monotone"
+                      stroke={SUPP_COLORS[si % SUPP_COLORS.length]}
+                      strokeWidth={2}
+                      dot={{ r: 5, fill: SUPP_COLORS[si % SUPP_COLORS.length] }}
+                      connectNulls={false}
+                      name={sm.source + '::' + sm.type}
+                    />
+                  );
+                })}
+              </ComposedChart>
             </ResponsiveContainer>
           </div>
         );

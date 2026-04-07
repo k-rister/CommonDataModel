@@ -107,6 +107,18 @@ export async function getMetricTypes(runId, sources) {
   return request('POST', `/run/${runId}/metric-types`, { sources });
 }
 
+export async function getIterationMetricSources(runIds, start, end) {
+  return request('POST', '/iterations/metric-sources', { runIds, start, end });
+}
+
+export async function getIterationMetricTypes(runIds, start, end, source) {
+  return request('POST', '/iterations/metric-types', { runIds, start, end, source });
+}
+
+export async function getSupplementalMetric(runIds, start, end, source, type) {
+  return request('POST', '/iterations/supplemental-metric', { runIds, start, end, source, type });
+}
+
 export async function getMetricData(params) {
   return request('POST', `/metric-data`, params);
 }

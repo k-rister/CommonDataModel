@@ -761,6 +761,38 @@ a.run-id:hover {
   overflow: hidden;
 }
 
+.compare-control-spacer {
+  flex: 1;
+}
+
+.compare-supp-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 8px 0;
+}
+
+.compare-supp-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  border: 2px solid;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.compare-supp-chip button {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 16px;
+  color: inherit;
+  line-height: 1;
+  padding: 0 0 0 2px;
+}
+
 .compare-loading {
   text-align: center;
   padding: 48px;

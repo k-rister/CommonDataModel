@@ -1016,6 +1016,198 @@ app.post('/api/v1/iterations/metric-values', async (req, res) => {
 });
 
 // --------------------------------------------------------------------------------------------------------------
+// POST /api/v1/iterations/metric-sources — get available metric sources across runs
+// Body: { runIds: [...], start, end }
+// Returns: { sources: [...] }
+// --------------------------------------------------------------------------------------------------------------
+app.post('/api/v1/iterations/metric-sources', async (req, res) => {
+  try {
+    const { runIds, start, end } = req.body;
+    if (!Array.isArray(runIds) || runIds.length === 0) {
+      return res.status(400).json({ code: 'MISSING_RUN_IDS', error: 'An array of run IDs is required' });
+    }
+    getInstancesInfo(instances);
+    var allSources = new Set();
+    for (const inst of instances) {
+      if (invalidInstance(inst)) continue;
+      var ydm = cdm.buildYearDotMonthRange(inst, 'run', start || null, end || null);
+      var sourcesPerRun = await cdm.mgetMetricSources(inst, runIds, ydm);
+      if (sourcesPerRun) {
+        sourcesPerRun.forEach(function (s) {
+          if (Array.isArray(s)) s.forEach(function (v) { allSources.add(v); });
+        });
+      }
+    }
+    var sorted = Array.from(allSources).sort();
+    serverLog('POST /api/v1/iterations/metric-sources: ' + sorted.length + ' source(s)');
+    res.json({ sources: sorted });
+  } catch (error) {
+    serverError('Error in POST /api/v1/iterations/metric-sources: ' + error);
+    res.status(500).json({ code: 'INTERNAL_ERROR', error: 'Failed to get metric sources: ' + error.message });
+  }
+});
+
+// --------------------------------------------------------------------------------------------------------------
+// POST /api/v1/iterations/metric-types — get metric types for a source across runs
+// Body: { runIds: [...], start, end, source }
+// Returns: { types: [...] }
+// --------------------------------------------------------------------------------------------------------------
+app.post('/api/v1/iterations/metric-types', async (req, res) => {
+  try {
+    const { runIds, start, end, source } = req.body;
+    if (!Array.isArray(runIds) || runIds.length === 0 || !source) {
+      return res.status(400).json({ code: 'MISSING_PARAMS', error: 'runIds and source are required' });
+    }
+    getInstancesInfo(instances);
+    var allTypes = new Set();
+    for (const inst of instances) {
+      if (invalidInstance(inst)) continue;
+      var ydm = cdm.buildYearDotMonthRange(inst, 'run', start || null, end || null);
+      // mgetMetricTypes needs parallel arrays of runIds and sources
+      var sources = runIds.map(function () { return source; });
+      var typesPerRun = await cdm.mgetMetricTypes(inst, runIds, sources, ydm);
+      if (typesPerRun) {
+        typesPerRun.forEach(function (t) {
+          if (Array.isArray(t)) t.forEach(function (v) { allTypes.add(v); });
+        });
+      }
+    }
+    var sorted = Array.from(allTypes).sort();
+    serverLog('POST /api/v1/iterations/metric-types: ' + sorted.length + ' type(s) for source ' + source);
+    res.json({ types: sorted });
+  } catch (error) {
+    serverError('Error in POST /api/v1/iterations/metric-types: ' + error);
+    res.status(500).json({ code: 'INTERNAL_ERROR', error: 'Failed to get metric types: ' + error.message });
+  }
+});
+
+// --------------------------------------------------------------------------------------------------------------
+// POST /api/v1/iterations/supplemental-metric — get values for a specific metric source/type
+// Body: { runIds: [...], start, end, source, type }
+// Returns: { values: { iterationId: { sampleValues, mean, stddevPct } } }
+// --------------------------------------------------------------------------------------------------------------
+app.post('/api/v1/iterations/supplemental-metric', async (req, res) => {
+  try {
+    const { runIds, start, end, source, type } = req.body;
+    if (!Array.isArray(runIds) || runIds.length === 0 || !source || !type) {
+      return res.status(400).json({ code: 'MISSING_PARAMS', error: 'runIds, source, and type are required' });
+    }
+    getInstancesInfo(instances);
+    var result = {};
+
+    for (const inst of instances) {
+      if (invalidInstance(inst)) continue;
+      var ydm = cdm.buildYearDotMonthRange(inst, 'run', start || null, end || null);
+
+      var iterationsByRun = await cdm.mgetIterations(inst, runIds, ydm);
+      var allIterIds = [];
+      var iterRunIds = [];
+      for (var r = 0; r < runIds.length; r++) {
+        var runIters = (iterationsByRun && iterationsByRun[r]) || [];
+        for (var it = 0; it < runIters.length; it++) {
+          allIterIds.push(runIters[it]);
+          iterRunIds.push(runIds[r]);
+        }
+      }
+      if (allIterIds.length === 0) continue;
+
+      var samples = await cdm.mgetSamples(inst, allIterIds, ydm);
+      var statuses = await cdm.mgetSampleStatuses(inst, samples || [], ydm);
+      if (typeof statuses === 'undefined') statuses = [];
+      var periodNames = await cdm.mgetPrimaryPeriodName(inst, allIterIds, ydm);
+
+      var passingSamplesByIter = [];
+      var passingPeriodNamesByIter = [];
+      for (var i = 0; i < allIterIds.length; i++) {
+        var iterSamples = (samples && samples[i]) || [];
+        var iterStatuses = (statuses && statuses[i]) || [];
+        var iterPeriodName = (periodNames && periodNames[i]) || null;
+        var passing = [];
+        for (var s = 0; s < iterSamples.length; s++) {
+          if (iterStatuses[s] === 'pass') passing.push(iterSamples[s]);
+        }
+        passingSamplesByIter.push(passing);
+        passingPeriodNamesByIter.push(iterPeriodName);
+      }
+
+      var primaryPeriodIds = [];
+      var hasPassing = passingSamplesByIter.some(function (s) { return s.length > 0; });
+      if (hasPassing) {
+        primaryPeriodIds = await cdm.mgetPrimaryPeriodId(inst, passingSamplesByIter, passingPeriodNamesByIter, ydm);
+        if (typeof primaryPeriodIds === 'undefined') primaryPeriodIds = [];
+      }
+
+      var periodRanges = [];
+      if (primaryPeriodIds.length > 0) {
+        periodRanges = await cdm.mgetPeriodRange(inst, primaryPeriodIds, ydm);
+        if (typeof periodRanges === 'undefined') periodRanges = [];
+      }
+
+      var metricSets = [];
+      var metricSetMap = [];
+      for (var i = 0; i < allIterIds.length; i++) {
+        var iterPeriodIds = (primaryPeriodIds[i]) || [];
+        var iterRanges = (periodRanges[i]) || [];
+        for (var s = 0; s < iterPeriodIds.length; s++) {
+          if (!iterPeriodIds[s]) continue;
+          var range = iterRanges[s];
+          if (!range || !range.begin || !range.end) continue;
+          metricSets.push({
+            run: iterRunIds[i],
+            period: iterPeriodIds[s],
+            source: source,
+            type: type,
+            begin: range.begin,
+            end: range.end,
+            resolution: 1,
+            breakout: []
+          });
+          metricSetMap.push(i);
+        }
+      }
+
+      if (metricSets.length > 0) {
+        var resp = await cdm.getMetricDataSets(inst, metricSets, ydm);
+        if (resp['ret-code'] === 0 && resp['data-sets']) {
+          var dataSets = resp['data-sets'];
+          var valuesByIdx = {};
+          for (var m = 0; m < dataSets.length; m++) {
+            var iterIdx = metricSetMap[m];
+            if (!valuesByIdx[iterIdx]) valuesByIdx[iterIdx] = [];
+            if (dataSets[m] && dataSets[m].values) {
+              var keys = Object.keys(dataSets[m].values);
+              if (keys.length > 0 && dataSets[m].values[keys[0]].length > 0) {
+                valuesByIdx[iterIdx].push(dataSets[m].values[keys[0]][0].value);
+              }
+            }
+          }
+
+          for (var idx in valuesByIdx) {
+            var vals = valuesByIdx[idx];
+            var iterId = allIterIds[idx];
+            if (vals.length === 0) continue;
+            var sum = 0;
+            for (var v = 0; v < vals.length; v++) sum += vals[v];
+            var mean = sum / vals.length;
+            var variance = 0;
+            for (var v = 0; v < vals.length; v++) variance += (vals[v] - mean) * (vals[v] - mean);
+            var stddev = vals.length > 1 ? Math.sqrt(variance / (vals.length - 1)) : 0;
+            var stddevPct = mean !== 0 ? (stddev / Math.abs(mean)) * 100 : 0;
+            result[iterId] = { sampleValues: vals, mean: mean, stddevPct: stddevPct };
+          }
+        }
+      }
+    }
+
+    serverLog('POST /api/v1/iterations/supplemental-metric: ' + source + '::' + type + ' -> ' + Object.keys(result).length + ' iteration(s)');
+    res.json({ values: result });
+  } catch (error) {
+    serverError('Error in POST /api/v1/iterations/supplemental-metric: ' + error);
+    res.status(500).json({ code: 'INTERNAL_ERROR', error: 'Failed to get supplemental metric: ' + error.message });
+  }
+});
+
+// --------------------------------------------------------------------------------------------------------------
 // FIELD VALUE ENDPOINTS — return distinct values for search dropdowns
 // All accept optional ?start=YYYY.MM&end=YYYY.MM to limit index scope
 // --------------------------------------------------------------------------------------------------------------
