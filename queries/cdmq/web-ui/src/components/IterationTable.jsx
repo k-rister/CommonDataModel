@@ -275,6 +275,7 @@ export default function IterationTable({ iterations, selected, onToggleSelect, o
             <tr>
               <th className={thClass('run')} onClick={() => handleSort('run')}>
                 Run
+                {sorted.length > 0 && <div className="column-hint">select iterations then click <span className="hint-button">Compare</span> above to graph</div>}
               </th>
               <th>
                 <input
@@ -284,7 +285,10 @@ export default function IterationTable({ iterations, selected, onToggleSelect, o
                   disabled={sorted.length === 0}
                 />
               </th>
-              <th>Unique <span className="benchmark-badge" style={{fontSize:9,verticalAlign:'middle'}}>bench</span> <span className="tag" style={{fontSize:9,verticalAlign:'middle'}}>tag</span> <span className="param" style={{fontSize:9,verticalAlign:'middle'}}>param</span></th>
+              <th>
+                Unique <span className="benchmark-badge" style={{fontSize:9,verticalAlign:'middle'}}>bench</span> <span className="tag" style={{fontSize:9,verticalAlign:'middle'}}>tag</span> <span className="param" style={{fontSize:9,verticalAlign:'middle'}}>param</span>
+                {sorted.length > 0 && <div className="column-hint">click any box below to add filter, then click <span className="hint-button">Search</span> to apply</div>}
+              </th>
               <th className={thClass('metric')} onClick={() => handleSort('metric')}>
                 Primary Metric
               </th>
@@ -307,7 +311,27 @@ export default function IterationTable({ iterations, selected, onToggleSelect, o
             {!loading && sorted.length === 0 && iterations.length === 0 && (
               <tr className="loading-row">
                 <td colSpan={6}>
-                  <span className="empty-msg">Search for runs to see iterations.</span>
+                  <div className="workflow-guide">
+                    <div className="workflow-title">Getting Started</div>
+                    <div className="workflow-steps">
+                      <div className="workflow-step">
+                        <span className="workflow-num">1</span>
+                        <span>Set a <b>date range</b> and optionally filter by benchmark, tags, params, or user above</span>
+                      </div>
+                      <div className="workflow-step">
+                        <span className="workflow-num">2</span>
+                        <span>Click <b>Search</b> to find matching iterations</span>
+                      </div>
+                      <div className="workflow-step">
+                        <span className="workflow-num">3</span>
+                        <span>Click values in the <b>Unique</b> column to refine your filters, then search again</span>
+                      </div>
+                      <div className="workflow-step">
+                        <span className="workflow-num">4</span>
+                        <span>Select iterations with <b>checkboxes</b>, then click <b>Compare</b> to see bar charts</span>
+                      </div>
+                    </div>
+                  </div>
                 </td>
               </tr>
             )}
