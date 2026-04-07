@@ -765,33 +765,6 @@ a.run-id:hover {
   flex: 1;
 }
 
-.compare-supp-list {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  padding: 8px 0;
-}
-
-.compare-supp-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 3px 8px;
-  border: 2px solid;
-  border-radius: 12px;
-  font-size: 12px;
-  font-weight: 500;
-}
-
-.compare-supp-chip button {
-  background: none;
-  border: none;
-  cursor: pointer;
-  font-size: 16px;
-  color: inherit;
-  line-height: 1;
-  padding: 0 0 0 2px;
-}
 
 .compare-display-toggle {
   display: flex;
@@ -803,10 +776,95 @@ a.run-id:hover {
   font-size: 11px;
 }
 
+.compare-metric-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+
+.compare-metric-row {
+  border-left: 3px solid;
+  padding: 6px 12px;
+  background: var(--surface);
+  border-radius: 0 var(--radius) var(--radius) 0;
+  border-top: 1px solid var(--border);
+  border-right: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+
+.compare-metric-row-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.compare-metric-name {
+  font-weight: 600;
+  font-size: 13px;
+}
+
 .compare-supp-mode {
-  font-size: 9px;
-  opacity: 0.6;
-  margin-left: 2px;
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+.compare-breakout-select {
+  padding: 2px 6px;
+  font-size: 11px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.compare-metric-remove {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 18px;
+  color: var(--text-muted);
+  line-height: 1;
+  margin-left: auto;
+}
+
+.compare-metric-remove:hover {
+  color: var(--danger);
+}
+
+.compare-metric-breakouts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 4px;
+  padding-left: 8px;
+}
+
+.compare-breakout-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 6px;
+  background: var(--surface-alt);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.compare-breakout-chip button {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 14px;
+  color: var(--text-muted);
+  line-height: 1;
+  padding: 0;
+}
+
+.compare-breakout-chip button:hover {
+  color: var(--danger);
 }
 
 .compare-chart-with-labels {

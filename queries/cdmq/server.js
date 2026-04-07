@@ -1083,17 +1083,20 @@ app.post('/api/v1/iterations/metric-types', async (req, res) => {
 
 // --------------------------------------------------------------------------------------------------------------
 // POST /api/v1/iterations/supplemental-metric — get values for a specific metric source/type
-// Body: { runIds: [...], start, end, source, type }
-// Returns: { values: { iterationId: { sampleValues, mean, stddevPct } } }
+// Body: { runIds: [...], start, end, source, type, breakout: [...] }
+// Returns: { values: { iterationId: { labels: { label: { mean, stddevPct, sampleValues } }, remainingBreakouts: [...] } } }
+// When breakout is empty, returns a single label "__all__" with the aggregated value.
 // --------------------------------------------------------------------------------------------------------------
 app.post('/api/v1/iterations/supplemental-metric', async (req, res) => {
   try {
-    const { runIds, start, end, source, type } = req.body;
+    const { runIds, start, end, source, type, breakout } = req.body;
+    var breakoutArr = Array.isArray(breakout) ? breakout : [];
     if (!Array.isArray(runIds) || runIds.length === 0 || !source || !type) {
       return res.status(400).json({ code: 'MISSING_PARAMS', error: 'runIds, source, and type are required' });
     }
     getInstancesInfo(instances);
     var result = {};
+    var remainingBreakouts = [];
 
     for (const inst of instances) {
       if (invalidInstance(inst)) continue;
@@ -1160,7 +1163,7 @@ app.post('/api/v1/iterations/supplemental-metric', async (req, res) => {
             begin: range.begin,
             end: range.end,
             resolution: 1,
-            breakout: []
+            breakout: breakoutArr.slice()
           });
           metricSetMap.push(i);
         }
@@ -1170,37 +1173,57 @@ app.post('/api/v1/iterations/supplemental-metric', async (req, res) => {
         var resp = await cdm.getMetricDataSets(inst, metricSets, ydm);
         if (resp['ret-code'] === 0 && resp['data-sets']) {
           var dataSets = resp['data-sets'];
+          // Collect per-label values per iteration (for breakouts, there are multiple labels)
+          // valuesByIdx: { iterIdx: { label: [values from each sample] } }
           var valuesByIdx = {};
+          var allRemainingBreakouts = null;
           for (var m = 0; m < dataSets.length; m++) {
             var iterIdx = metricSetMap[m];
-            if (!valuesByIdx[iterIdx]) valuesByIdx[iterIdx] = [];
-            if (dataSets[m] && dataSets[m].values) {
-              var keys = Object.keys(dataSets[m].values);
-              if (keys.length > 0 && dataSets[m].values[keys[0]].length > 0) {
-                valuesByIdx[iterIdx].push(dataSets[m].values[keys[0]][0].value);
+            if (!valuesByIdx[iterIdx]) valuesByIdx[iterIdx] = {};
+            if (dataSets[m]) {
+              // Capture remainingBreakouts from the first data set that has it
+              if (allRemainingBreakouts === null && dataSets[m].remainingBreakouts) {
+                allRemainingBreakouts = dataSets[m].remainingBreakouts;
+              }
+              if (dataSets[m].values) {
+                Object.keys(dataSets[m].values).forEach(function (label) {
+                  if (!valuesByIdx[iterIdx][label]) valuesByIdx[iterIdx][label] = [];
+                  var entries = dataSets[m].values[label];
+                  if (Array.isArray(entries) && entries.length > 0) {
+                    valuesByIdx[iterIdx][label].push(entries[0].value);
+                  }
+                });
               }
             }
           }
 
+          // Compute mean/stddev per label per iteration
           for (var idx in valuesByIdx) {
-            var vals = valuesByIdx[idx];
             var iterId = allIterIds[idx];
-            if (vals.length === 0) continue;
-            var sum = 0;
-            for (var v = 0; v < vals.length; v++) sum += vals[v];
-            var mean = sum / vals.length;
-            var variance = 0;
-            for (var v = 0; v < vals.length; v++) variance += (vals[v] - mean) * (vals[v] - mean);
-            var stddev = vals.length > 1 ? Math.sqrt(variance / (vals.length - 1)) : 0;
-            var stddevPct = mean !== 0 ? (stddev / Math.abs(mean)) * 100 : 0;
-            result[iterId] = { sampleValues: vals, mean: mean, stddevPct: stddevPct };
+            var labels = {};
+            Object.keys(valuesByIdx[idx]).forEach(function (label) {
+              var vals = valuesByIdx[idx][label];
+              if (vals.length === 0) return;
+              var sum = 0;
+              for (var v = 0; v < vals.length; v++) sum += vals[v];
+              var mean = sum / vals.length;
+              var variance = 0;
+              for (var v = 0; v < vals.length; v++) variance += (vals[v] - mean) * (vals[v] - mean);
+              var stddev = vals.length > 1 ? Math.sqrt(variance / (vals.length - 1)) : 0;
+              var stddevPct = mean !== 0 ? (stddev / Math.abs(mean)) * 100 : 0;
+              labels[label] = { sampleValues: vals, mean: mean, stddevPct: stddevPct };
+            });
+            if (Object.keys(labels).length > 0) {
+              result[iterId] = { labels: labels };
+            }
           }
+          remainingBreakouts = allRemainingBreakouts || [];
         }
       }
     }
 
-    serverLog('POST /api/v1/iterations/supplemental-metric: ' + source + '::' + type + ' -> ' + Object.keys(result).length + ' iteration(s)');
-    res.json({ values: result });
+    serverLog('POST /api/v1/iterations/supplemental-metric: ' + source + '::' + type + ' breakout=' + JSON.stringify(breakoutArr) + ' -> ' + Object.keys(result).length + ' iteration(s)');
+    res.json({ values: result, remainingBreakouts: remainingBreakouts });
   } catch (error) {
     serverError('Error in POST /api/v1/iterations/supplemental-metric: ' + error);
     res.status(500).json({ code: 'INTERNAL_ERROR', error: 'Failed to get supplemental metric: ' + error.message });

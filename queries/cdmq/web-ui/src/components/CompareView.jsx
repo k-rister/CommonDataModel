@@ -348,16 +348,23 @@ export default function CompareView({ selected, groupBy, setGroupBy, seriesBy, s
 
   var handleAddMetric = useCallback(function () {
     if (!addMetricSource || !addMetricType) return;
-    // Check if already added
     var exists = supplementalMetrics.some(function (m) { return m.source === addMetricSource && m.type === addMetricType; });
     if (exists) { setShowAddMetric(false); return; }
     var ctx = getRunContext();
     setAddMetricLoading(true);
     timeWork('Fetch ' + addMetricSource + '::' + addMetricType, function () {
-      return api.getSupplementalMetric(ctx.runIds, ctx.start, ctx.end, addMetricSource, addMetricType);
+      return api.getSupplementalMetric(ctx.runIds, ctx.start, ctx.end, addMetricSource, addMetricType, []);
     }).then(function (res) {
       setSupplementalMetrics(function (prev) {
-        return prev.concat([{ source: addMetricSource, type: addMetricType, values: res.values || {}, display: addMetricDisplay }]);
+        return prev.concat([{
+          source: addMetricSource,
+          type: addMetricType,
+          values: res.values || {},
+          display: addMetricDisplay,
+          breakouts: [],            // active breakout dimensions
+          remainingBreakouts: res.remainingBreakouts || [],
+          loading: false,
+        }]);
       });
       setShowAddMetric(false);
     }).catch(function (err) {
@@ -366,6 +373,64 @@ export default function CompareView({ selected, groupBy, setGroupBy, seriesBy, s
       setAddMetricLoading(false);
     });
   }, [iterations, addMetricSource, addMetricType, addMetricDisplay, supplementalMetrics]);
+
+  var handleAddBreakout = useCallback(function (si, breakoutName) {
+    var sm = supplementalMetrics[si];
+    var newBreakouts = sm.breakouts.concat([breakoutName]);
+    // Mark as loading
+    setSupplementalMetrics(function (prev) {
+      var next = prev.slice();
+      next[si] = Object.assign({}, next[si], { loading: true });
+      return next;
+    });
+    var ctx = getRunContext();
+    timeWork('Breakout ' + sm.source + '::' + sm.type + ' by ' + breakoutName, function () {
+      return api.getSupplementalMetric(ctx.runIds, ctx.start, ctx.end, sm.source, sm.type, newBreakouts);
+    }).then(function (res) {
+      setSupplementalMetrics(function (prev) {
+        var next = prev.slice();
+        next[si] = Object.assign({}, next[si], {
+          values: res.values || {},
+          breakouts: newBreakouts,
+          remainingBreakouts: res.remainingBreakouts || [],
+          loading: false,
+        });
+        return next;
+      });
+    }).catch(function (err) {
+      console.error('Failed to add breakout:', err);
+      setSupplementalMetrics(function (prev) {
+        var next = prev.slice();
+        next[si] = Object.assign({}, next[si], { loading: false });
+        return next;
+      });
+    });
+  }, [iterations, supplementalMetrics]);
+
+  var handleRemoveBreakout = useCallback(function (si, breakoutIdx) {
+    var sm = supplementalMetrics[si];
+    var newBreakouts = sm.breakouts.slice(0, breakoutIdx);
+    setSupplementalMetrics(function (prev) {
+      var next = prev.slice();
+      next[si] = Object.assign({}, next[si], { loading: true });
+      return next;
+    });
+    var ctx = getRunContext();
+    timeWork('Remove breakout from ' + sm.source + '::' + sm.type, function () {
+      return api.getSupplementalMetric(ctx.runIds, ctx.start, ctx.end, sm.source, sm.type, newBreakouts);
+    }).then(function (res) {
+      setSupplementalMetrics(function (prev) {
+        var next = prev.slice();
+        next[si] = Object.assign({}, next[si], {
+          values: res.values || {},
+          breakouts: newBreakouts,
+          remainingBreakouts: res.remainingBreakouts || [],
+          loading: false,
+        });
+        return next;
+      });
+    });
+  }, [iterations, supplementalMetrics]);
 
   var handleRemoveMetric = useCallback(function (idx) {
     setSupplementalMetrics(function (prev) { return prev.filter(function (_, i) { return i !== idx; }); });
@@ -487,12 +552,32 @@ export default function CompareView({ selected, groupBy, setGroupBy, seriesBy, s
           isGap: false,
         };
         // Add supplemental metric values with stddev for error bars
+        // Format: sm.values[iterId] = { labels: { label: { mean, stddevPct, sampleValues } } }
         supplementalMetrics.forEach(function (sm, si) {
           var smv = sm.values[it.iterationId];
-          entry['supp_' + si] = smv ? smv.mean : null;
-          entry['supp_' + si + '_stddevPct'] = smv ? smv.stddevPct : null;
-          entry['supp_' + si + '_error'] = smv ? computeStddev(smv) : 0;
-          entry['supp_' + si + '_samples'] = smv ? smv.sampleValues.length : 0;
+          if (smv && smv.labels) {
+            var labelKeys = Object.keys(smv.labels);
+            // Use the first label for the aggregate value (works for no-breakout case)
+            if (labelKeys.length >= 1) {
+              var lv = smv.labels[labelKeys[0]];
+              entry['supp_' + si] = lv.mean;
+              entry['supp_' + si + '_stddevPct'] = lv.stddevPct;
+              entry['supp_' + si + '_error'] = computeStddev(lv);
+              entry['supp_' + si + '_samples'] = lv.sampleValues ? lv.sampleValues.length : 0;
+            }
+            // For breakouts with multiple labels, also store per-label data
+            if (labelKeys.length > 1) {
+              labelKeys.forEach(function (lk) {
+                var lv = smv.labels[lk];
+                entry['supp_' + si + '_' + lk] = lv.mean;
+              });
+            }
+          } else {
+            entry['supp_' + si] = null;
+            entry['supp_' + si + '_stddevPct'] = null;
+            entry['supp_' + si + '_error'] = 0;
+            entry['supp_' + si + '_samples'] = 0;
+          }
         });
         chartData.push(entry);
       }
@@ -620,14 +705,40 @@ export default function CompareView({ selected, groupBy, setGroupBy, seriesBy, s
         )}
       </div>
       {supplementalMetrics.length > 0 && (
-        <div className="compare-supp-list">
+        <div className="compare-metric-panel">
           {supplementalMetrics.map(function (sm, si) {
+            var color = SUPP_COLORS[si % SUPP_COLORS.length];
             return (
-              <span key={si} className="compare-supp-chip" style={{ borderColor: SUPP_COLORS[si % SUPP_COLORS.length], color: SUPP_COLORS[si % SUPP_COLORS.length] }}>
-                {sm.source}::{sm.type}
-                <span className="compare-supp-mode">{sm.display === 'panel' ? 'panel' : 'overlay'}</span>
-                <button onClick={function () { handleRemoveMetric(si); }}>&times;</button>
-              </span>
+              <div key={si} className="compare-metric-row" style={{ borderLeftColor: color }}>
+                <div className="compare-metric-row-header">
+                  <span className="compare-metric-name" style={{ color: color }}>{sm.source}::{sm.type}</span>
+                  <span className="compare-supp-mode">{sm.display === 'panel' ? 'panel' : 'overlay'}</span>
+                  {sm.loading && <span className="spinner" style={{ marginLeft: 8 }} />}
+                  {!sm.loading && sm.remainingBreakouts && sm.remainingBreakouts.length > 0 && (
+                    <select
+                      className="compare-breakout-select"
+                      value=""
+                      onChange={function (e) { if (e.target.value) handleAddBreakout(si, e.target.value); }}
+                    >
+                      <option value="">+ Breakout</option>
+                      {sm.remainingBreakouts.map(function (b) { return <option key={b} value={b}>{b}</option>; })}
+                    </select>
+                  )}
+                  <button className="compare-metric-remove" onClick={function () { handleRemoveMetric(si); }}>&times;</button>
+                </div>
+                {sm.breakouts.length > 0 && (
+                  <div className="compare-metric-breakouts">
+                    {sm.breakouts.map(function (b, bi) {
+                      return (
+                        <span key={bi} className="compare-breakout-chip">
+                          {b}
+                          <button onClick={function () { handleRemoveBreakout(si, bi); }}>&times;</button>
+                        </span>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
             );
           })}
         </div>
@@ -859,15 +970,44 @@ export default function CompareView({ selected, groupBy, setGroupBy, seriesBy, s
                 </Bar>
                 {supplementalMetrics.map(function (sm, si) {
                   if (sm.display === 'panel') return null;
+                  var color = SUPP_COLORS[si % SUPP_COLORS.length];
+                  // If breakouts produce multiple labels, render one line per label
+                  if (sm.breakouts.length > 0) {
+                    var labelSet = new Set();
+                    chart.data.forEach(function (d) {
+                      if (d.isGap) return;
+                      Object.keys(d).forEach(function (k) {
+                        if (k.startsWith('supp_' + si + '_') && !k.endsWith('_stddevPct') && !k.endsWith('_error') && !k.endsWith('_samples') && k !== 'supp_' + si) {
+                          labelSet.add(k);
+                        }
+                      });
+                    });
+                    return Array.from(labelSet).map(function (lk, li) {
+                      var labelName = lk.substring(('supp_' + si + '_').length);
+                      return (
+                        <Line
+                          key={si + '-' + li}
+                          dataKey={lk}
+                          yAxisId="right"
+                          type="monotone"
+                          stroke={SUPP_COLORS[(si + li) % SUPP_COLORS.length]}
+                          strokeWidth={2}
+                          dot={{ r: 4, fill: SUPP_COLORS[(si + li) % SUPP_COLORS.length] }}
+                          connectNulls={false}
+                          name={labelName}
+                        />
+                      );
+                    });
+                  }
                   return (
                     <Line
                       key={si}
                       dataKey={'supp_' + si}
                       yAxisId="right"
                       type="monotone"
-                      stroke={SUPP_COLORS[si % SUPP_COLORS.length]}
+                      stroke={color}
                       strokeWidth={2}
-                      dot={{ r: 5, fill: SUPP_COLORS[si % SUPP_COLORS.length] }}
+                      dot={{ r: 5, fill: color }}
                       connectNulls={false}
                       name={sm.source + '::' + sm.type}
                     />
