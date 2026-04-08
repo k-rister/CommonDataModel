@@ -469,7 +469,7 @@ checkCreateIndex = function (instance, index) {
     }
     var cdmVer = resp['cdm-ver'];
 
-    if (Object.keys(instance['indices']).includes(cdmVer)) {
+    if (instance['indices'] && Object.keys(instance['indices']).includes(cdmVer)) {
       if (instance['indices'][cdmVer].includes(thisIndex)) {
         continue;
       }
@@ -495,6 +495,7 @@ checkCreateIndex = function (instance, index) {
     var data = JSON.parse(resp.getBody());
     //TODO: catch error and return with error
     debuglog('response:::\n' + JSON.stringify(data, null, 2));
+    if (!instance['indices']) instance['indices'] = {};
     if (!Object.keys(instance['indices']).includes(cdmVer)) {
       instance['indices'][cdmVer] = [];
     }
