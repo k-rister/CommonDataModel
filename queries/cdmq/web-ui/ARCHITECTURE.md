@@ -1,5 +1,9 @@
 # Crucible Web UI — Architecture & Design
 
+> **Note:** This document covers the initial Phase 1 architecture. For comprehensive
+> documentation covering all phases (search, compare, supplemental metrics, breakouts,
+> URL sharing, etc.), see **[DESIGN.md](DESIGN.md)**.
+
 ## Overview
 
 The Crucible Web UI is a React-based single-page application that provides
