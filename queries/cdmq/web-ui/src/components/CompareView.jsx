@@ -1023,7 +1023,7 @@ export default function CompareView({ selected, groupBy, setGroupBy, seriesBy, s
                     </ComposedChart>
                   </ResponsiveContainer>
                     </div>
-                    {hasOverlays && <div className="compare-yaxis-label compare-yaxis-right">&nbsp;</div>}
+                    {supplementalMetrics.length > 0 && <div className="compare-yaxis-label compare-yaxis-right">&nbsp;</div>}
                   </div>
                 </div>
               );
