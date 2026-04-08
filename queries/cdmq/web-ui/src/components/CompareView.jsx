@@ -115,18 +115,37 @@ function computeCommonVarying(iters) {
 // Build label from an iteration showing only varying params/tags/benchmark
 // that are NOT already shown by the group-by or series-by dimensions
 function buildIterLabel(it, varyingKeys, excludeKeys) {
-  var parts = [];
-  // Include benchmark if it varies and isn't covered by group/series
+  // Collect varying params and tags, then group by value to consolidate
+  // e.g., bs=4k, rw=4k, size=4k becomes bs,rw,size=4k
+  var items = [];
   if (varyingKeys.has('benchmark') && !excludeKeys.has('benchmark')) {
-    parts.push(it.benchmark || '');
+    items.push({ name: 'benchmark', val: it.benchmark || '' });
   }
   (it.params || []).forEach(function (p) {
     var key = 'param:' + p.arg;
-    if (varyingKeys.has(key) && !excludeKeys.has(key)) parts.push(p.arg + '=' + p.val);
+    if (varyingKeys.has(key) && !excludeKeys.has(key)) {
+      items.push({ name: p.arg, val: String(p.val) });
+    }
   });
   (it.tags || []).forEach(function (t) {
     var key = 'tag:' + t.name;
-    if (varyingKeys.has(key) && !excludeKeys.has(key)) parts.push(t.name + '=' + t.val);
+    if (varyingKeys.has(key) && !excludeKeys.has(key)) {
+      items.push({ name: t.name, val: t.val });
+    }
+  });
+  // Group names that share the same value
+  var byVal = {};
+  var valOrder = [];
+  items.forEach(function (item) {
+    if (!byVal[item.val]) {
+      byVal[item.val] = [];
+      valOrder.push(item.val);
+    }
+    byVal[item.val].push(item.name);
+  });
+  var parts = [];
+  valOrder.forEach(function (val) {
+    parts.push(byVal[val].join(',') + '=' + val);
   });
   return parts.join(', ') || it.iterationId.substring(0, 8);
 }
