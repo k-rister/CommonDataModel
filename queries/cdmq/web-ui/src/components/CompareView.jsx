@@ -361,6 +361,7 @@ export default function CompareView({ selected, groupBy, setGroupBy, seriesBy, s
           type: addMetricType,
           values: res.values || {},
           display: addMetricDisplay,
+          chartType: 'bar',         // 'bar', 'stacked', 'line'
           breakouts: [],            // active breakout dimensions
           remainingBreakouts: res.remainingBreakouts || [],
           loading: false,
@@ -431,6 +432,14 @@ export default function CompareView({ selected, groupBy, setGroupBy, seriesBy, s
       });
     });
   }, [iterations, supplementalMetrics]);
+
+  var handleChartTypeChange = useCallback(function (si, chartType) {
+    setSupplementalMetrics(function (prev) {
+      var next = prev.slice();
+      next[si] = Object.assign({}, next[si], { chartType: chartType });
+      return next;
+    });
+  }, []);
 
   var handleRemoveMetric = useCallback(function (idx) {
     setSupplementalMetrics(function (prev) { return prev.filter(function (_, i) { return i !== idx; }); });
@@ -724,6 +733,17 @@ export default function CompareView({ selected, groupBy, setGroupBy, seriesBy, s
                       {sm.remainingBreakouts.map(function (b) { return <option key={b} value={b}>{b}</option>; })}
                     </select>
                   )}
+                  {sm.breakouts.length > 0 && (
+                    <select
+                      className="compare-breakout-select"
+                      value={sm.chartType || 'bar'}
+                      onChange={function (e) { handleChartTypeChange(si, e.target.value); }}
+                    >
+                      <option value="bar">Bars</option>
+                      <option value="stacked">Stacked</option>
+                      <option value="line">Lines</option>
+                    </select>
+                  )}
                   <button className="compare-metric-remove" onClick={function () { handleRemoveMetric(si); }}>&times;</button>
                 </div>
                 {sm.breakouts.length > 0 && (
@@ -895,14 +915,26 @@ export default function CompareView({ selected, groupBy, setGroupBy, seriesBy, s
                             });
                           });
                           var labels = Array.from(labelSet).sort();
+                          var ct = sm.chartType || 'bar';
                           if (labels.length > 0) {
                             return labels.map(function (lk, li) {
                               var labelName = lk.substring((dataKey + '_').length);
-                              var barColor = SUPP_COLORS[(si + li) % SUPP_COLORS.length];
+                              var itemColor = SUPP_COLORS[(si + li) % SUPP_COLORS.length];
+                              if (ct === 'line') {
+                                return (
+                                  <Line key={lk} dataKey={lk} yAxisId="left" type="monotone"
+                                    stroke={itemColor} strokeWidth={2}
+                                    dot={{ r: 4, fill: itemColor }}
+                                    connectNulls={false} name={labelName} />
+                                );
+                              }
                               return (
-                                <Bar key={lk} dataKey={lk} yAxisId="left" radius={[3, 3, 0, 0]} name={labelName}>
+                                <Bar key={lk} dataKey={lk} yAxisId="left"
+                                  radius={ct === 'stacked' ? [0, 0, 0, 0] : [3, 3, 0, 0]}
+                                  stackId={ct === 'stacked' ? 'stack' : undefined}
+                                  name={labelName}>
                                   {chart.data.map(function (entry, idx) {
-                                    return <Cell key={idx} fill={entry.isGap ? 'transparent' : barColor} fillOpacity={0.7} />;
+                                    return <Cell key={idx} fill={entry.isGap ? 'transparent' : itemColor} fillOpacity={0.7} />;
                                   })}
                                 </Bar>
                               );
