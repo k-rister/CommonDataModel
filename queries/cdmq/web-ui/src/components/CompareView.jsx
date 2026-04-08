@@ -433,6 +433,48 @@ export default function CompareView({ selected, groupBy, setGroupBy, seriesBy, s
     });
   }, [iterations, supplementalMetrics]);
 
+  // Update breakout filter value locally (no re-query yet)
+  var handleUpdateBreakoutFilter = useCallback(function (si, bi, newBreakout) {
+    setSupplementalMetrics(function (prev) {
+      var next = prev.slice();
+      var breakouts = next[si].breakouts.slice();
+      breakouts[bi] = newBreakout;
+      next[si] = Object.assign({}, next[si], { breakouts: breakouts });
+      return next;
+    });
+  }, []);
+
+  // Re-query metric with current breakout filters
+  var handleApplyBreakoutFilter = useCallback(function (si) {
+    var sm = supplementalMetrics[si];
+    setSupplementalMetrics(function (prev) {
+      var next = prev.slice();
+      next[si] = Object.assign({}, next[si], { loading: true });
+      return next;
+    });
+    var ctx = getRunContext();
+    timeWork('Apply breakout filter for ' + sm.source + '::' + sm.type, function () {
+      return api.getSupplementalMetric(ctx.runIds, ctx.start, ctx.end, sm.source, sm.type, sm.breakouts);
+    }).then(function (res) {
+      setSupplementalMetrics(function (prev) {
+        var next = prev.slice();
+        next[si] = Object.assign({}, next[si], {
+          values: res.values || {},
+          remainingBreakouts: res.remainingBreakouts || [],
+          loading: false,
+        });
+        return next;
+      });
+    }).catch(function (err) {
+      console.error('Failed to apply breakout filter:', err);
+      setSupplementalMetrics(function (prev) {
+        var next = prev.slice();
+        next[si] = Object.assign({}, next[si], { loading: false });
+        return next;
+      });
+    });
+  }, [iterations, supplementalMetrics]);
+
   var handleChartTypeChange = useCallback(function (si, chartType) {
     setSupplementalMetrics(function (prev) {
       var next = prev.slice();
@@ -749,13 +791,40 @@ export default function CompareView({ selected, groupBy, setGroupBy, seriesBy, s
                 {sm.breakouts.length > 0 && (
                   <div className="compare-metric-breakouts">
                     {sm.breakouts.map(function (b, bi) {
+                      // Parse breakout: "field" or "field=value"
+                      var eqIdx = b.indexOf('=');
+                      var fieldName = eqIdx >= 0 ? b.substring(0, eqIdx) : b;
+                      var filterVal = eqIdx >= 0 ? b.substring(eqIdx + 1) : '';
                       return (
                         <span key={bi} className="compare-breakout-chip">
-                          {b}
+                          <span className="compare-breakout-field">{fieldName}</span>
+                          <input
+                            className="compare-breakout-filter"
+                            type="text"
+                            placeholder="all"
+                            value={filterVal}
+                            title="Filter: exact value, val1+val2, r/regex/, R/regex/"
+                            onClick={function (e) { e.stopPropagation(); }}
+                            onChange={function (e) {
+                              var newVal = e.target.value;
+                              var newBreakout = newVal ? fieldName + '=' + newVal : fieldName;
+                              handleUpdateBreakoutFilter(si, bi, newBreakout);
+                            }}
+                            onKeyDown={function (e) {
+                              if (e.key === 'Enter') {
+                                e.preventDefault();
+                                handleApplyBreakoutFilter(si);
+                              }
+                            }}
+                          />
                           <button onClick={function () { handleRemoveBreakout(si, bi); }}>&times;</button>
                         </span>
                       );
                     })}
+                    <button className="btn btn-sm btn-secondary" onClick={function () { handleApplyBreakoutFilter(si); }}
+                      disabled={sm.loading} style={{ fontSize: 10, padding: '2px 6px' }}>
+                      Apply
+                    </button>
                   </div>
                 )}
               </div>

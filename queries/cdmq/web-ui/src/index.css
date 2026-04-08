@@ -853,6 +853,31 @@ a.run-id:hover {
   color: var(--text-secondary);
 }
 
+.compare-breakout-field {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.compare-breakout-filter {
+  width: 100px;
+  padding: 1px 4px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  font-size: 11px;
+  background: var(--surface);
+  color: var(--text);
+  outline: none;
+}
+
+.compare-breakout-filter:focus {
+  border-color: var(--accent);
+}
+
+.compare-breakout-filter::placeholder {
+  color: var(--text-muted);
+  font-style: italic;
+}
+
 .compare-breakout-chip button {
   background: none;
   border: none;
