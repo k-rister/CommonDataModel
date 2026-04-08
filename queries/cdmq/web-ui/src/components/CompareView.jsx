@@ -801,7 +801,16 @@ export default function CompareView({ selected, groupBy, setGroupBy, seriesBy, s
               var color = SUPP_COLORS[si % SUPP_COLORS.length];
               var dataKey = 'supp_' + si;
               var vals = [];
-              chart.data.forEach(function (d) { if (!d.isGap && d[dataKey] != null) vals.push(d[dataKey]); });
+              chart.data.forEach(function (d) {
+                if (d.isGap) return;
+                if (d[dataKey] != null) vals.push(d[dataKey]);
+                // Also include breakout label values for domain
+                Object.keys(d).forEach(function (k) {
+                  if (k.startsWith(dataKey + '_') && !k.endsWith('_stddevPct') && !k.endsWith('_error') && !k.endsWith('_samples') && d[k] != null) {
+                    vals.push(d[k]);
+                  }
+                });
+              });
               var min = vals.length > 0 ? Math.min.apply(null, vals) : 0;
               var max = vals.length > 0 ? Math.max.apply(null, vals) : 1;
               var pad = (max - min) * 0.1 || 0.1;
@@ -826,7 +835,6 @@ export default function CompareView({ selected, groupBy, setGroupBy, seriesBy, s
                           if (!props.active || !props.payload || props.payload.length === 0) return null;
                           var entry = props.payload[0].payload;
                           if (!entry || entry.isGap) return null;
-                          var v = entry[dataKey];
                           return (
                             <div style={{
                               background: 'var(--surface)', border: '1px solid var(--border)',
@@ -834,15 +842,36 @@ export default function CompareView({ selected, groupBy, setGroupBy, seriesBy, s
                               fontSize: 12, boxShadow: 'var(--shadow)',
                             }}>
                               {entry.name && <div>{entry.name}</div>}
-                              <div style={{ fontWeight: 600, color: color, marginTop: 4 }}>
-                                {sm.source}::{sm.type}: {v != null ? (function () {
-                                  var txt = formatValue(v);
-                                  var pct = entry[dataKey + '_stddevPct'];
-                                  var samp = entry[dataKey + '_samples'];
-                                  if (samp > 1 && pct != null) txt += ' (\u00b1' + pct.toFixed(1) + '%)';
-                                  return txt;
-                                })() : 'no data'}
-                              </div>
+                              {(function () {
+                                if (sm.breakouts.length > 0) {
+                                  // Show all breakout label values
+                                  var prefix = dataKey + '_';
+                                  return Object.keys(entry).filter(function (k) {
+                                    return k.startsWith(prefix) && !k.endsWith('_stddevPct') && !k.endsWith('_error') && !k.endsWith('_samples');
+                                  }).sort().map(function (k, ki) {
+                                    var labelName = k.substring(prefix.length);
+                                    var v = entry[k];
+                                    var barColor = SUPP_COLORS[(si + ki) % SUPP_COLORS.length];
+                                    return (
+                                      <div key={k} style={{ fontWeight: 600, color: barColor, marginTop: ki === 0 ? 4 : 2 }}>
+                                        {labelName}: {v != null ? formatValue(v) : 'no data'}
+                                      </div>
+                                    );
+                                  });
+                                }
+                                var v = entry[dataKey];
+                                return (
+                                  <div style={{ fontWeight: 600, color: color, marginTop: 4 }}>
+                                    {sm.source}::{sm.type}: {v != null ? (function () {
+                                      var txt = formatValue(v);
+                                      var pct = entry[dataKey + '_stddevPct'];
+                                      var samp = entry[dataKey + '_samples'];
+                                      if (samp > 1 && pct != null) txt += ' (\u00b1' + pct.toFixed(1) + '%)';
+                                      return txt;
+                                    })() : 'no data'}
+                                  </div>
+                                );
+                              })()}
                             </div>
                           );
                         }}
@@ -852,12 +881,44 @@ export default function CompareView({ selected, groupBy, setGroupBy, seriesBy, s
                       ) : (
                         <YAxis yAxisId="right" orientation="right" width={1} tick={false} axisLine={false} />
                       )}
-                      <Bar dataKey={dataKey} yAxisId="left" radius={[3, 3, 0, 0]}>
-                        <ErrorBar dataKey={dataKey + '_error'} width={4} strokeWidth={2} stroke="var(--text-secondary)" />
-                        {chart.data.map(function (entry, idx) {
-                          return <Cell key={idx} fill={entry.isGap ? 'transparent' : color} fillOpacity={0.7} />;
-                        })}
-                      </Bar>
+                      {(function () {
+                        // Detect breakout labels from chart data
+                        if (sm.breakouts.length > 0) {
+                          var labelSet = new Set();
+                          chart.data.forEach(function (d) {
+                            if (d.isGap) return;
+                            Object.keys(d).forEach(function (k) {
+                              var prefix = dataKey + '_';
+                              if (k.startsWith(prefix) && !k.endsWith('_stddevPct') && !k.endsWith('_error') && !k.endsWith('_samples')) {
+                                labelSet.add(k);
+                              }
+                            });
+                          });
+                          var labels = Array.from(labelSet).sort();
+                          if (labels.length > 0) {
+                            return labels.map(function (lk, li) {
+                              var labelName = lk.substring((dataKey + '_').length);
+                              var barColor = SUPP_COLORS[(si + li) % SUPP_COLORS.length];
+                              return (
+                                <Bar key={lk} dataKey={lk} yAxisId="left" radius={[3, 3, 0, 0]} name={labelName}>
+                                  {chart.data.map(function (entry, idx) {
+                                    return <Cell key={idx} fill={entry.isGap ? 'transparent' : barColor} fillOpacity={0.7} />;
+                                  })}
+                                </Bar>
+                              );
+                            });
+                          }
+                        }
+                        // No breakouts — single bar
+                        return (
+                          <Bar dataKey={dataKey} yAxisId="left" radius={[3, 3, 0, 0]}>
+                            <ErrorBar dataKey={dataKey + '_error'} width={4} strokeWidth={2} stroke="var(--text-secondary)" />
+                            {chart.data.map(function (entry, idx) {
+                              return <Cell key={idx} fill={entry.isGap ? 'transparent' : color} fillOpacity={0.7} />;
+                            })}
+                          </Bar>
+                        );
+                      })()}
                     </ComposedChart>
                   </ResponsiveContainer>
                     </div>
