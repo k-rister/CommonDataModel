@@ -65,20 +65,23 @@ function formatDimValue(dim, val) {
 
 // Compute which params and tags are common (same value across all iterations)
 // vs varying (different values). Returns { common: [{key,val}], varyingKeys: Set }
-function computeCommonVarying(iters) {
+function computeCommonVarying(iters, hiddenSet) {
   if (iters.length === 0) return { common: [], varyingKeys: new Set() };
+  var hidden = hiddenSet || new Set();
 
   var benchmarks = new Set();
   var paramValues = {};
   var tagValues = {};
 
   iters.forEach(function (it) {
-    if (it.benchmark) benchmarks.add(it.benchmark);
+    if (it.benchmark && !hidden.has('benchmark')) benchmarks.add(it.benchmark);
     (it.params || []).forEach(function (p) {
+      if (hidden.has('param:' + p.arg)) return;
       if (!paramValues[p.arg]) paramValues[p.arg] = new Set();
       paramValues[p.arg].add(String(p.val));
     });
     (it.tags || []).forEach(function (t) {
+      if (hidden.has('tag:' + t.name)) return;
       if (!tagValues[t.name]) tagValues[t.name] = new Set();
       tagValues[t.name].add(t.val);
     });
@@ -208,14 +211,8 @@ function WrappedAxisTick(props) {
 // Build group info including per-group common items
 // (items that vary globally but are the same within this group)
 function buildGroupInfo(groupValue, size, iters, globalVaryingKeys, excludeKeys) {
-  var label = formatDimLabel(excludeKeys.values().next().value || '') + '=' + formatDimValue('', groupValue);
-  // For the first key in excludeKeys which is groupBy
-  for (var k of excludeKeys) {
-    if (k !== 'none') {
-      label = formatDimLabel(k) + '=' + formatDimValue(k, groupValue);
-      break;
-    }
-  }
+  // groupValue is already the formatted compound label (e.g., "nthreads=1, gro=on")
+  var label = groupValue;
 
   if (iters.length <= 1) {
     return { label: label, size: size, groupCommon: [] };
@@ -260,6 +257,18 @@ function buildGroupInfo(groupValue, size, iters, globalVaryingKeys, excludeKeys)
   return { label: label, size: size, groupCommon: groupCommon };
 }
 
+// Compute compound group key from multiple group-by dimensions
+function getCompoundGroupValue(it, groupByList) {
+  if (!groupByList || groupByList.length === 0) return '__all__';
+  return groupByList.map(function (dim) {
+    return formatDimLabel(dim) + '=' + formatDimValue(dim, getDimValue(it, dim));
+  }).join(', ');
+}
+
+function hasGroupBy(groupByList) {
+  return groupByList && groupByList.length > 0;
+}
+
 function buildDimOptions(iterations) {
   var opts = [{ value: 'none', label: 'None' }];
   // Only include dimensions that have more than one distinct value
@@ -291,7 +300,7 @@ function buildDimOptions(iterations) {
   return opts;
 }
 
-export default function CompareView({ selected, groupBy, setGroupBy, seriesBy, setSeriesBy }) {
+export default function CompareView({ selected, groupByList, setGroupByList, seriesBy, setSeriesBy, hiddenFields, setHiddenFields }) {
   var [metricValues, setMetricValues] = useState({});
   var [loading, setLoading] = useState(false);
   var [supplementalMetrics, setSupplementalMetrics] = useState([]); // [{ source, type, values: {iterId: {mean,...}} }]
@@ -336,8 +345,15 @@ export default function CompareView({ selected, groupBy, setGroupBy, seriesBy, s
     });
   }, [iterations]);
 
+  var hiddenSet = useMemo(function () { return new Set(hiddenFields); }, [hiddenFields]);
+
   var dimOptions = useMemo(function () {
-    return buildDimOptions(iterations);
+    return buildDimOptions(iterations).filter(function (o) { return !hiddenSet.has(o.value); });
+  }, [iterations, hiddenSet]);
+
+  // All dimension options (including hidden) for the hide field picker
+  var allDimOptions = useMemo(function () {
+    return buildDimOptions(iterations).filter(function (o) { return o.value !== 'none'; });
   }, [iterations]);
 
   var handleShowAddMetric = useCallback(function () {
@@ -521,13 +537,15 @@ export default function CompareView({ selected, groupBy, setGroupBy, seriesBy, s
       var iters = byMetric[metricName];
 
       // Compute common vs varying params/tags across these iterations
-      var cv = computeCommonVarying(iters);
+      var cv = computeCommonVarying(iters, hiddenSet);
       var varyingKeys = cv.varyingKeys;
       var commonItems = cv.common;
 
-      // Sort by group-by value, then series-by value (natural/numeric sort)
+      // Sort by compound group-by value, then series-by value (natural/numeric sort)
       var sorted = iters.slice().sort(function (a, b) {
-        var cmp = naturalCompare(getDimValue(a, groupBy), getDimValue(b, groupBy));
+        var ga = getCompoundGroupValue(a, groupByList);
+        var gb = getCompoundGroupValue(b, groupByList);
+        var cmp = naturalCompare(ga, gb);
         if (cmp !== 0) return cmp;
         return naturalCompare(getDimValue(a, seriesBy), getDimValue(b, seriesBy));
       });
@@ -547,10 +565,10 @@ export default function CompareView({ selected, groupBy, setGroupBy, seriesBy, s
 
       // Precompute per-group common keys (items that vary globally but are common within a group)
       var perGroupCommonKeys = {};
-      if (groupBy !== 'none') {
+      if (hasGroupBy(groupByList)) {
         var groupedIters = {};
         sorted.forEach(function (it) {
-          var gv = getDimValue(it, groupBy);
+          var gv = getCompoundGroupValue(it, groupByList);
           if (!groupedIters[gv]) groupedIters[gv] = [];
           groupedIters[gv].push(it);
         });
@@ -585,10 +603,10 @@ export default function CompareView({ selected, groupBy, setGroupBy, seriesBy, s
       var prevGroup = null;
       for (var i = 0; i < sorted.length; i++) {
         var it = sorted[i];
-        var gv = getDimValue(it, groupBy);
+        var gv = getCompoundGroupValue(it, groupByList);
 
         // Insert gap between groups
-        if (groupBy !== 'none' && gv !== prevGroup) {
+        if (hasGroupBy(groupByList) && gv !== prevGroup) {
           if (prevGroup !== null) {
             chartData.push({ name: '', value: null, isGap: true });
           }
@@ -604,7 +622,8 @@ export default function CompareView({ selected, groupBy, setGroupBy, seriesBy, s
         // Series-by is NOT excluded — each bar has a different series value
         // and it needs to be visible in the label for identification.
         var excludeKeys = new Set();
-        if (groupBy !== 'none') excludeKeys.add(groupBy);
+        groupByList.forEach(function (dim) { excludeKeys.add(dim); });
+        hiddenSet.forEach(function (dim) { excludeKeys.add(dim); });
         var groupCommon = perGroupCommonKeys[gv];
         if (groupCommon) groupCommon.forEach(function (k) { excludeKeys.add(k); });
         var label = buildIterLabel(it, varyingKeys, excludeKeys);
@@ -662,17 +681,17 @@ export default function CompareView({ selected, groupBy, setGroupBy, seriesBy, s
 
       // Compute group sizes and per-group common items for labels above the chart
       var groupInfo = [];
-      if (groupBy !== 'none') {
+      if (hasGroupBy(groupByList)) {
         // Collect iterations per group
         var groupIters = {};
         sorted.forEach(function (it) {
-          var gv = getDimValue(it, groupBy);
+          var gv = getCompoundGroupValue(it, groupByList);
           if (!groupIters[gv]) groupIters[gv] = [];
           groupIters[gv].push(it);
         });
-        // Keys to exclude from per-group common: globally common, group-by, series-by
+        // Keys to exclude from per-group common: group-by dims, series-by
         var excludeFromGroupCommon = new Set();
-        if (groupBy !== 'none') excludeFromGroupCommon.add(groupBy);
+        groupByList.forEach(function (dim) { excludeFromGroupCommon.add(dim); });
         if (seriesBy !== 'none') excludeFromGroupCommon.add(seriesBy);
 
         var currentGroup = null;
@@ -699,7 +718,7 @@ export default function CompareView({ selected, groupBy, setGroupBy, seriesBy, s
     });
 
     return result;
-  }, [iterations, metricValues, groupBy, seriesBy, supplementalMetrics]);
+  }, [iterations, metricValues, groupByList, seriesBy, supplementalMetrics, hiddenSet]);
 
   if (loading) {
     return (
@@ -722,14 +741,62 @@ export default function CompareView({ selected, groupBy, setGroupBy, seriesBy, s
       <div className="compare-controls">
         <div className="compare-control">
           <label>Group by</label>
-          <select value={groupBy} onChange={function (e) { setGroupBy(e.target.value); }}>
-            {dimOptions.map(function (o) { return <option key={o.value} value={o.value}>{o.label}</option>; })}
+          {groupByList.map(function (dim, gi) {
+            return (
+              <span key={gi} className="compare-groupby-chip">
+                {dimOptions.find(function (o) { return o.value === dim; })?.label || dim}
+                <button onClick={function () { setGroupByList(groupByList.filter(function (_, i) { return i !== gi; })); }}>&times;</button>
+              </span>
+            );
+          })}
+          <select
+            value=""
+            onChange={function (e) {
+              if (e.target.value && !groupByList.includes(e.target.value)) {
+                setGroupByList(groupByList.concat([e.target.value]));
+              }
+            }}
+          >
+            <option value="">{groupByList.length === 0 ? 'None' : '+ Add'}</option>
+            {dimOptions.filter(function (o) { return o.value !== 'none' && !groupByList.includes(o.value); }).map(function (o) {
+              return <option key={o.value} value={o.value}>{o.label}</option>;
+            })}
           </select>
         </div>
         <div className="compare-control">
           <label>Series by</label>
           <select value={seriesBy} onChange={function (e) { setSeriesBy(e.target.value); }}>
             {dimOptions.map(function (o) { return <option key={o.value} value={o.value}>{o.label}</option>; })}
+          </select>
+        </div>
+        <div className="compare-control">
+          <label>Hide</label>
+          {hiddenFields.map(function (dim, hi) {
+            var opt = allDimOptions.find(function (o) { return o.value === dim; });
+            return (
+              <span key={hi} className="compare-hidden-chip">
+                {opt ? opt.label : dim}
+                <button onClick={function () { setHiddenFields(hiddenFields.filter(function (_, i) { return i !== hi; })); }}>&times;</button>
+              </span>
+            );
+          })}
+          <select
+            value=""
+            onChange={function (e) {
+              if (e.target.value && !hiddenFields.includes(e.target.value)) {
+                // Also remove from groupByList and seriesBy if hidden
+                setHiddenFields(hiddenFields.concat([e.target.value]));
+                if (groupByList.includes(e.target.value)) {
+                  setGroupByList(groupByList.filter(function (d) { return d !== e.target.value; }));
+                }
+                if (seriesBy === e.target.value) setSeriesBy('none');
+              }
+            }}
+          >
+            <option value="">{hiddenFields.length === 0 ? 'None' : '+ Hide'}</option>
+            {allDimOptions.filter(function (o) { return !hiddenFields.includes(o.value); }).map(function (o) {
+              return <option key={o.value} value={o.value}>{o.label}</option>;
+            })}
           </select>
         </div>
         <div className="compare-control-spacer" />
@@ -1108,7 +1175,7 @@ export default function CompareView({ selected, groupBy, setGroupBy, seriesBy, s
                     var lines = [];
                     if (entry.name) lines.push(entry.name);
                     if (entry.groupValue && entry.groupValue !== '__all__')
-                      lines.push(formatDimLabel(groupBy) + ': ' + formatDimValue(groupBy, entry.groupValue));
+                      lines.push(entry.groupValue);
                     if (entry.seriesValue && entry.seriesValue !== '__all__')
                       lines.push(formatDimLabel(seriesBy) + ': ' + formatDimValue(seriesBy, entry.seriesValue));
                     var metricLines = [];

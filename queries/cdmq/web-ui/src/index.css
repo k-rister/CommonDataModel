@@ -667,7 +667,8 @@ a.run-id:hover {
 
 .compare-controls {
   display: flex;
-  gap: 16px;
+  flex-wrap: wrap;
+  gap: 12px;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -678,8 +679,9 @@ a.run-id:hover {
 
 .compare-control {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
 }
 
 .compare-control label {
@@ -703,6 +705,58 @@ a.run-id:hover {
 
 .compare-control select:focus {
   border-color: var(--accent);
+}
+
+.compare-groupby-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 3px 6px;
+  background: var(--accent-light);
+  border: 1px solid var(--accent);
+  border-radius: 3px;
+  font-size: 11px;
+  color: var(--accent);
+  white-space: nowrap;
+}
+
+.compare-groupby-chip button {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 14px;
+  color: var(--accent);
+  line-height: 1;
+  padding: 0 0 0 2px;
+}
+
+.compare-groupby-chip button:hover {
+  color: var(--danger);
+}
+
+.compare-hidden-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 3px 6px;
+  background: rgba(220, 38, 38, 0.1);
+  border: 1px solid rgba(220, 38, 38, 0.3);
+  border-radius: 3px;
+  font-size: 11px;
+  color: var(--danger);
+  white-space: nowrap;
+  text-decoration: line-through;
+}
+
+.compare-hidden-chip button {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 14px;
+  color: var(--danger);
+  line-height: 1;
+  padding: 0 0 0 2px;
+  text-decoration: none;
 }
 
 .compare-legend {
@@ -735,21 +789,18 @@ a.run-id:hover {
 
 .compare-group-bar-item {
   text-align: center;
-  padding: 6px 4px;
+  padding: 6px 8px;
   border: 1px solid var(--border);
   border-bottom: none;
   border-radius: var(--radius) var(--radius) 0 0;
   background: var(--surface-alt);
-  overflow: hidden;
 }
 
 .compare-group-bar-label {
   font-size: 12px;
   font-weight: 600;
   color: var(--accent);
-  white-space: nowrap;
-  text-overflow: ellipsis;
-  overflow: hidden;
+  word-break: break-word;
 }
 
 .compare-group-bar-common {
