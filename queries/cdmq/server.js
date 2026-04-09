@@ -1089,14 +1089,18 @@ app.post('/api/v1/iterations/metric-types', async (req, res) => {
 // --------------------------------------------------------------------------------------------------------------
 app.post('/api/v1/iterations/supplemental-metric', async (req, res) => {
   try {
-    const { runIds, start, end, source, type, breakout } = req.body;
+    const { runIds, start, end, source, type, breakout, filter, sampleIndex } = req.body;
     var breakoutArr = Array.isArray(breakout) ? breakout : [];
+    var filterVal = filter || null;
+    // sampleIndex: null/undefined = auto-select best sample, number = use that sample index
+    var requestedSampleIdx = (typeof sampleIndex === 'number') ? sampleIndex : null;
     if (!Array.isArray(runIds) || runIds.length === 0 || !source || !type) {
       return res.status(400).json({ code: 'MISSING_PARAMS', error: 'runIds, source, and type are required' });
     }
     getInstancesInfo(instances);
     var result = {};
     var remainingBreakouts = [];
+    var sampleInfo = {}; // { iterationId: { samples: [{ index, primaryMetricValue }], selectedIndex } }
 
     for (const inst of instances) {
       if (invalidInstance(inst)) continue;
@@ -1146,24 +1150,105 @@ app.post('/api/v1/iterations/supplemental-metric', async (req, res) => {
         if (typeof periodRanges === 'undefined') periodRanges = [];
       }
 
+      // Fetch primary metric values per sample to determine best sample
+      var primaryMetrics = await cdm.mgetPrimaryMetric(inst, allIterIds, ydm);
+
+      // For each iteration, determine which sample to use and build metric sets
       var metricSets = [];
       var metricSetMap = [];
       for (var i = 0; i < allIterIds.length; i++) {
         var iterPeriodIds = (primaryPeriodIds[i]) || [];
         var iterRanges = (periodRanges[i]) || [];
-        for (var s = 0; s < iterPeriodIds.length; s++) {
+        var numSamples = iterPeriodIds.length;
+        if (numSamples === 0) continue;
+
+        // Build sample info: get primary metric value per sample
+        // We need to query the primary metric for each sample to get per-sample values
+        var pm = (primaryMetrics && primaryMetrics[i]) || null;
+        var pmParts = pm && typeof pm === 'string' ? pm.split('::') : [];
+        var iterSampleInfo = [];
+
+        // Query primary metric for each sample to get per-sample values
+        var pmSets = [];
+        for (var s = 0; s < numSamples; s++) {
           if (!iterPeriodIds[s]) continue;
           var range = iterRanges[s];
           if (!range || !range.begin || !range.end) continue;
+          if (pmParts.length >= 2) {
+            pmSets.push({
+              run: iterRunIds[i],
+              period: iterPeriodIds[s],
+              source: pmParts[0],
+              type: pmParts[1],
+              begin: range.begin,
+              end: range.end,
+              resolution: 1,
+              breakout: []
+            });
+          }
+          iterSampleInfo.push({ index: s, periodId: iterPeriodIds[s], range: range, primaryMetricValue: null });
+        }
+
+        // Fetch primary metric values for this iteration's samples
+        if (pmSets.length > 0) {
+          var pmResp = await cdm.getMetricDataSets(inst, pmSets, ydm);
+          if (pmResp['ret-code'] === 0 && pmResp['data-sets']) {
+            for (var ps = 0; ps < pmResp['data-sets'].length; ps++) {
+              var pmDs = pmResp['data-sets'][ps];
+              if (pmDs && pmDs.values) {
+                var pmKeys = Object.keys(pmDs.values);
+                if (pmKeys.length > 0 && pmDs.values[pmKeys[0]].length > 0) {
+                  iterSampleInfo[ps].primaryMetricValue = pmDs.values[pmKeys[0]][0].value;
+                }
+              }
+            }
+          }
+        }
+
+        // Determine selected sample
+        var selectedSampleIdx;
+        if (requestedSampleIdx !== null && requestedSampleIdx < iterSampleInfo.length) {
+          selectedSampleIdx = requestedSampleIdx;
+        } else {
+          // Auto-select: sample closest to mean primary metric
+          var pmVals = iterSampleInfo.map(function (si) { return si.primaryMetricValue; }).filter(function (v) { return v !== null; });
+          if (pmVals.length > 0) {
+            var pmSum = 0;
+            for (var v = 0; v < pmVals.length; v++) pmSum += pmVals[v];
+            var pmMean = pmSum / pmVals.length;
+            var bestIdx = 0;
+            var bestDiff = Infinity;
+            for (var si2 = 0; si2 < iterSampleInfo.length; si2++) {
+              if (iterSampleInfo[si2].primaryMetricValue !== null) {
+                var diff = Math.abs(iterSampleInfo[si2].primaryMetricValue - pmMean);
+                if (diff < bestDiff) { bestDiff = diff; bestIdx = si2; }
+              }
+            }
+            selectedSampleIdx = bestIdx;
+          } else {
+            selectedSampleIdx = 0;
+          }
+        }
+
+        // Store sample info for this iteration
+        sampleInfo[allIterIds[i]] = {
+          samples: iterSampleInfo.map(function (si) { return { index: si.index, primaryMetricValue: si.primaryMetricValue }; }),
+          selectedIndex: selectedSampleIdx,
+        };
+
+        // Build metric set for the selected sample only
+        var sel = iterSampleInfo[selectedSampleIdx];
+        if (sel && sel.periodId && sel.range && sel.range.begin && sel.range.end) {
           metricSets.push({
             run: iterRunIds[i],
-            period: iterPeriodIds[s],
+            period: sel.periodId,
             source: source,
             type: type,
-            begin: range.begin,
-            end: range.end,
+            begin: sel.range.begin,
+            end: sel.range.end,
             resolution: 1,
-            breakout: breakoutArr.slice()
+            breakout: breakoutArr.slice(),
+            filter: filterVal
           });
           metricSetMap.push(i);
         }
@@ -1173,48 +1258,26 @@ app.post('/api/v1/iterations/supplemental-metric', async (req, res) => {
         var resp = await cdm.getMetricDataSets(inst, metricSets, ydm);
         if (resp['ret-code'] === 0 && resp['data-sets']) {
           var dataSets = resp['data-sets'];
-          // Collect per-label values per iteration (for breakouts, there are multiple labels)
-          // valuesByIdx: { iterIdx: { label: [values from each sample] } }
-          var valuesByIdx = {};
           var allRemainingBreakouts = null;
           for (var m = 0; m < dataSets.length; m++) {
             var iterIdx = metricSetMap[m];
-            if (!valuesByIdx[iterIdx]) valuesByIdx[iterIdx] = {};
+            var iterId = allIterIds[iterIdx];
             if (dataSets[m]) {
-              // Capture remainingBreakouts from the first data set that has it
               if (allRemainingBreakouts === null && dataSets[m].remainingBreakouts) {
                 allRemainingBreakouts = dataSets[m].remainingBreakouts;
               }
               if (dataSets[m].values) {
+                var labels = {};
                 Object.keys(dataSets[m].values).forEach(function (label) {
-                  if (!valuesByIdx[iterIdx][label]) valuesByIdx[iterIdx][label] = [];
                   var entries = dataSets[m].values[label];
                   if (Array.isArray(entries) && entries.length > 0) {
-                    valuesByIdx[iterIdx][label].push(entries[0].value);
+                    labels[label] = { sampleValues: [entries[0].value], mean: entries[0].value, stddevPct: 0 };
                   }
                 });
+                if (Object.keys(labels).length > 0) {
+                  result[iterId] = { labels: labels };
+                }
               }
-            }
-          }
-
-          // Compute mean/stddev per label per iteration
-          for (var idx in valuesByIdx) {
-            var iterId = allIterIds[idx];
-            var labels = {};
-            Object.keys(valuesByIdx[idx]).forEach(function (label) {
-              var vals = valuesByIdx[idx][label];
-              if (vals.length === 0) return;
-              var sum = 0;
-              for (var v = 0; v < vals.length; v++) sum += vals[v];
-              var mean = sum / vals.length;
-              var variance = 0;
-              for (var v = 0; v < vals.length; v++) variance += (vals[v] - mean) * (vals[v] - mean);
-              var stddev = vals.length > 1 ? Math.sqrt(variance / (vals.length - 1)) : 0;
-              var stddevPct = mean !== 0 ? (stddev / Math.abs(mean)) * 100 : 0;
-              labels[label] = { sampleValues: vals, mean: mean, stddevPct: stddevPct };
-            });
-            if (Object.keys(labels).length > 0) {
-              result[iterId] = { labels: labels };
             }
           }
           remainingBreakouts = allRemainingBreakouts || [];
@@ -1222,8 +1285,8 @@ app.post('/api/v1/iterations/supplemental-metric', async (req, res) => {
       }
     }
 
-    serverLog('POST /api/v1/iterations/supplemental-metric: ' + source + '::' + type + ' breakout=' + JSON.stringify(breakoutArr) + ' -> ' + Object.keys(result).length + ' iteration(s)');
-    res.json({ values: result, remainingBreakouts: remainingBreakouts });
+    serverLog('POST /api/v1/iterations/supplemental-metric: ' + source + '::' + type + ' breakout=' + JSON.stringify(breakoutArr) + ' sampleIndex=' + requestedSampleIdx + ' -> ' + Object.keys(result).length + ' iteration(s)');
+    res.json({ values: result, remainingBreakouts: remainingBreakouts, sampleInfo: sampleInfo });
   } catch (error) {
     serverError('Error in POST /api/v1/iterations/supplemental-metric: ' + error);
     res.status(500).json({ code: 'INTERNAL_ERROR', error: 'Failed to get supplemental metric: ' + error.message });

@@ -870,6 +870,39 @@ a.run-id:hover {
   cursor: pointer;
 }
 
+.compare-filter-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.compare-filter-label {
+  font-size: 10px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+}
+
+.compare-filter-input {
+  width: 80px;
+  padding: 2px 6px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  font-size: 11px;
+  background: var(--surface);
+  color: var(--text);
+  outline: none;
+  font-family: monospace;
+}
+
+.compare-filter-input:focus {
+  border-color: var(--accent);
+}
+
+.compare-filter-input::placeholder {
+  color: var(--text-muted);
+  font-family: inherit;
+}
+
 .compare-metric-remove {
   background: none;
   border: none;

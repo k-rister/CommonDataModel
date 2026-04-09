@@ -388,7 +388,7 @@ export default function CompareView({ selected, groupByList, setGroupByList, ser
     var ctx = getRunContext();
     setAddMetricLoading(true);
     timeWork('Fetch ' + addMetricSource + '::' + addMetricType, function () {
-      return api.getSupplementalMetric(ctx.runIds, ctx.start, ctx.end, addMetricSource, addMetricType, []);
+      return api.getSupplementalMetric(ctx.runIds, ctx.start, ctx.end, addMetricSource, addMetricType, [], null, null);
     }).then(function (res) {
       setSupplementalMetrics(function (prev) {
         return prev.concat([{
@@ -397,6 +397,9 @@ export default function CompareView({ selected, groupByList, setGroupByList, ser
           values: res.values || {},
           display: addMetricDisplay,
           chartType: 'bar',         // 'bar', 'stacked', 'line'
+          filter: '',               // e.g., 'gt:0.01', 'lt:100'
+          sampleIndex: null,        // null = auto-best, number = specific sample
+          sampleInfo: res.sampleInfo || {},  // { iterationId: { samples: [...], selectedIndex } }
           breakouts: [],            // active breakout dimensions
           remainingBreakouts: res.remainingBreakouts || [],
           loading: false,
@@ -421,12 +424,13 @@ export default function CompareView({ selected, groupByList, setGroupByList, ser
     });
     var ctx = getRunContext();
     timeWork('Breakout ' + sm.source + '::' + sm.type + ' by ' + breakoutName, function () {
-      return api.getSupplementalMetric(ctx.runIds, ctx.start, ctx.end, sm.source, sm.type, newBreakouts);
+      return api.getSupplementalMetric(ctx.runIds, ctx.start, ctx.end, sm.source, sm.type, newBreakouts, sm.filter, sm.sampleIndex);
     }).then(function (res) {
       setSupplementalMetrics(function (prev) {
         var next = prev.slice();
         next[si] = Object.assign({}, next[si], {
           values: res.values || {},
+          sampleInfo: res.sampleInfo || next[si].sampleInfo,
           breakouts: newBreakouts,
           remainingBreakouts: res.remainingBreakouts || [],
           loading: false,
@@ -453,16 +457,89 @@ export default function CompareView({ selected, groupByList, setGroupByList, ser
     });
     var ctx = getRunContext();
     timeWork('Remove breakout from ' + sm.source + '::' + sm.type, function () {
-      return api.getSupplementalMetric(ctx.runIds, ctx.start, ctx.end, sm.source, sm.type, newBreakouts);
+      return api.getSupplementalMetric(ctx.runIds, ctx.start, ctx.end, sm.source, sm.type, newBreakouts, sm.filter, sm.sampleIndex);
     }).then(function (res) {
       setSupplementalMetrics(function (prev) {
         var next = prev.slice();
         next[si] = Object.assign({}, next[si], {
           values: res.values || {},
+          sampleInfo: res.sampleInfo || next[si].sampleInfo,
           breakouts: newBreakouts,
           remainingBreakouts: res.remainingBreakouts || [],
           loading: false,
         });
+        return next;
+      });
+    });
+  }, [iterations, supplementalMetrics]);
+
+  var handleSampleChange = useCallback(function (si, newSampleIndex) {
+    var idx = newSampleIndex === 'auto' ? null : parseInt(newSampleIndex, 10);
+    var sm = supplementalMetrics[si];
+    setSupplementalMetrics(function (prev) {
+      var next = prev.slice();
+      next[si] = Object.assign({}, next[si], { sampleIndex: idx, loading: true });
+      return next;
+    });
+    var ctx = getRunContext();
+    timeWork('Switch sample for ' + sm.source + '::' + sm.type, function () {
+      return api.getSupplementalMetric(ctx.runIds, ctx.start, ctx.end, sm.source, sm.type, sm.breakouts, sm.filter, idx);
+    }).then(function (res) {
+      setSupplementalMetrics(function (prev) {
+        var next = prev.slice();
+        next[si] = Object.assign({}, next[si], {
+          values: res.values || {},
+          sampleInfo: res.sampleInfo || next[si].sampleInfo,
+          remainingBreakouts: res.remainingBreakouts || [],
+          loading: false,
+        });
+        return next;
+      });
+    }).catch(function (err) {
+      console.error('Failed to switch sample:', err);
+      setSupplementalMetrics(function (prev) {
+        var next = prev.slice();
+        next[si] = Object.assign({}, next[si], { loading: false });
+        return next;
+      });
+    });
+  }, [iterations, supplementalMetrics]);
+
+  // Update metric filter value locally (no re-query yet)
+  var handleUpdateFilter = useCallback(function (si, newFilter) {
+    setSupplementalMetrics(function (prev) {
+      var next = prev.slice();
+      next[si] = Object.assign({}, next[si], { filter: newFilter });
+      return next;
+    });
+  }, []);
+
+  // Apply metric filter (re-query)
+  var handleApplyFilter = useCallback(function (si) {
+    var sm = supplementalMetrics[si];
+    setSupplementalMetrics(function (prev) {
+      var next = prev.slice();
+      next[si] = Object.assign({}, next[si], { loading: true });
+      return next;
+    });
+    var ctx = getRunContext();
+    timeWork('Apply filter for ' + sm.source + '::' + sm.type, function () {
+      return api.getSupplementalMetric(ctx.runIds, ctx.start, ctx.end, sm.source, sm.type, sm.breakouts, sm.filter, sm.sampleIndex);
+    }).then(function (res) {
+      setSupplementalMetrics(function (prev) {
+        var next = prev.slice();
+        next[si] = Object.assign({}, next[si], {
+          values: res.values || {},
+          remainingBreakouts: res.remainingBreakouts || [],
+          loading: false,
+        });
+        return next;
+      });
+    }).catch(function (err) {
+      console.error('Failed to apply filter:', err);
+      setSupplementalMetrics(function (prev) {
+        var next = prev.slice();
+        next[si] = Object.assign({}, next[si], { loading: false });
         return next;
       });
     });
@@ -489,7 +566,7 @@ export default function CompareView({ selected, groupByList, setGroupByList, ser
     });
     var ctx = getRunContext();
     timeWork('Apply breakout filter for ' + sm.source + '::' + sm.type, function () {
-      return api.getSupplementalMetric(ctx.runIds, ctx.start, ctx.end, sm.source, sm.type, sm.breakouts);
+      return api.getSupplementalMetric(ctx.runIds, ctx.start, ctx.end, sm.source, sm.type, sm.breakouts, sm.filter, sm.sampleIndex);
     }).then(function (res) {
       setSupplementalMetrics(function (prev) {
         var next = prev.slice();
@@ -872,6 +949,52 @@ export default function CompareView({ selected, groupByList, setGroupByList, ser
                       <option value="line">Lines</option>
                     </select>
                   )}
+                  {sm.sampleInfo && Object.keys(sm.sampleInfo).length > 0 && (function () {
+                    // Show sample selector — use first iteration's sample info as representative
+                    var firstIterId = Object.keys(sm.sampleInfo)[0];
+                    var si2 = sm.sampleInfo[firstIterId];
+                    if (!si2 || !si2.samples || si2.samples.length <= 1) return null;
+                    return (
+                      <span className="compare-filter-group">
+                        <label className="compare-filter-label">Sample:</label>
+                        <select
+                          className="compare-breakout-select"
+                          value={sm.sampleIndex != null ? sm.sampleIndex : 'auto'}
+                          onChange={function (e) { handleSampleChange(si, e.target.value); }}
+                        >
+                          <option value="auto">Best (auto)</option>
+                          {si2.samples.map(function (samp, idx2) {
+                            var pmv = samp.primaryMetricValue;
+                            var label2 = 'Sample ' + (idx2 + 1);
+                            if (pmv != null) label2 += ' (' + formatValue(pmv) + ')';
+                            if (idx2 === si2.selectedIndex && sm.sampleIndex == null) label2 += ' *';
+                            return <option key={idx2} value={idx2}>{label2}</option>;
+                          })}
+                        </select>
+                      </span>
+                    );
+                  })()}
+                  <span className="compare-filter-group">
+                    <label className="compare-filter-label">Filter:</label>
+                    <input
+                      className="compare-filter-input"
+                      type="text"
+                      placeholder="e.g. gt:0.01"
+                      value={sm.filter || ''}
+                      title="gt:N, ge:N, lt:N, le:N"
+                      onClick={function (e) { e.stopPropagation(); }}
+                      onChange={function (e) { handleUpdateFilter(si, e.target.value); }}
+                      onKeyDown={function (e) {
+                        if (e.key === 'Enter') { e.preventDefault(); handleApplyFilter(si); }
+                      }}
+                    />
+                    {sm.filter && (
+                      <button className="btn btn-sm btn-secondary" onClick={function () { handleApplyFilter(si); }}
+                        disabled={sm.loading} style={{ fontSize: 10, padding: '2px 6px' }}>
+                        Apply
+                      </button>
+                    )}
+                  </span>
                   <button className="compare-metric-remove" onClick={function () { handleRemoveMetric(si); }}>&times;</button>
                 </div>
                 {sm.breakouts.length > 0 && (
