@@ -1089,31 +1089,44 @@ app.post('/api/v1/iterations/metric-types', async (req, res) => {
 // --------------------------------------------------------------------------------------------------------------
 app.post('/api/v1/iterations/supplemental-metric', async (req, res) => {
   try {
-    const { runIds, start, end, source, type, breakout, filter, sampleIndex } = req.body;
+    const { runIds, iterations: reqIterations, start, end, source, type, breakout, filter, sampleIndex } = req.body;
     var breakoutArr = Array.isArray(breakout) ? breakout : [];
     var filterVal = filter || null;
-    // sampleIndex: null/undefined = auto-select best sample, number = use that sample index
     var requestedSampleIdx = (typeof sampleIndex === 'number') ? sampleIndex : null;
-    if (!Array.isArray(runIds) || runIds.length === 0 || !source || !type) {
-      return res.status(400).json({ code: 'MISSING_PARAMS', error: 'runIds, source, and type are required' });
+    if (!source || !type) {
+      return res.status(400).json({ code: 'MISSING_PARAMS', error: 'source and type are required' });
+    }
+    // Accept either iterations (array of {iterationId, runId}) or runIds (discover iterations)
+    if ((!Array.isArray(reqIterations) || reqIterations.length === 0) && (!Array.isArray(runIds) || runIds.length === 0)) {
+      return res.status(400).json({ code: 'MISSING_PARAMS', error: 'iterations or runIds are required' });
     }
     getInstancesInfo(instances);
     var result = {};
     var remainingBreakouts = [];
-    var sampleInfo = {}; // { iterationId: { samples: [{ index, primaryMetricValue }], selectedIndex } }
+    var sampleInfo = {};
 
     for (const inst of instances) {
       if (invalidInstance(inst)) continue;
       var ydm = cdm.buildYearDotMonthRange(inst, 'run', start || null, end || null);
 
-      var iterationsByRun = await cdm.mgetIterations(inst, runIds, ydm);
       var allIterIds = [];
       var iterRunIds = [];
-      for (var r = 0; r < runIds.length; r++) {
-        var runIters = (iterationsByRun && iterationsByRun[r]) || [];
-        for (var it = 0; it < runIters.length; it++) {
-          allIterIds.push(runIters[it]);
-          iterRunIds.push(runIds[r]);
+
+      if (Array.isArray(reqIterations) && reqIterations.length > 0) {
+        // Use provided iteration IDs directly
+        for (var it = 0; it < reqIterations.length; it++) {
+          allIterIds.push(reqIterations[it].iterationId);
+          iterRunIds.push(reqIterations[it].runId);
+        }
+      } else {
+        // Fall back to discovering iterations from run IDs
+        var iterationsByRun = await cdm.mgetIterations(inst, runIds, ydm);
+        for (var r = 0; r < runIds.length; r++) {
+          var runIters = (iterationsByRun && iterationsByRun[r]) || [];
+          for (var it2 = 0; it2 < runIters.length; it2++) {
+            allIterIds.push(runIters[it2]);
+            iterRunIds.push(runIds[r]);
+          }
         }
       }
       if (allIterIds.length === 0) continue;

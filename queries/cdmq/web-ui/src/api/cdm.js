@@ -115,8 +115,18 @@ export async function getIterationMetricTypes(runIds, start, end, source) {
   return request('POST', '/iterations/metric-types', { runIds, start, end, source });
 }
 
-export async function getSupplementalMetric(runIds, start, end, source, type, breakout, filter, sampleIndex) {
-  return request('POST', '/iterations/supplemental-metric', { runIds, start, end, source, type, breakout: breakout || [], filter: filter || null, sampleIndex: sampleIndex != null ? sampleIndex : null });
+export async function getSupplementalMetric(params) {
+  return request('POST', '/iterations/supplemental-metric', {
+    iterations: params.iterations || null,
+    runIds: params.runIds || null,
+    start: params.start,
+    end: params.end,
+    source: params.source,
+    type: params.type,
+    breakout: params.breakout || [],
+    filter: params.filter || null,
+    sampleIndex: params.sampleIndex != null ? params.sampleIndex : null,
+  });
 }
 
 export async function getMetricData(params) {

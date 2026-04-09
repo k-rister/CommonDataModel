@@ -326,7 +326,8 @@ export default function CompareView({ selected, groupByList, setGroupByList, ser
     var endDate = begins.length > 0 ? new Date(Math.max.apply(null, begins)) : null;
     var start = startDate ? startDate.getFullYear() + '.' + String(startDate.getMonth() + 1).padStart(2, '0') : null;
     var end = endDate ? endDate.getFullYear() + '.' + String(endDate.getMonth() + 1).padStart(2, '0') : null;
-    return { runIds: runIds, start: start, end: end };
+    var iterPairs = iterations.map(function (it) { return { iterationId: it.iterationId, runId: it.runId }; });
+    return { runIds: runIds, start: start, end: end, iterations: iterPairs };
   }
 
   useEffect(function () {
@@ -388,7 +389,7 @@ export default function CompareView({ selected, groupByList, setGroupByList, ser
     var ctx = getRunContext();
     setAddMetricLoading(true);
     timeWork('Fetch ' + addMetricSource + '::' + addMetricType, function () {
-      return api.getSupplementalMetric(ctx.runIds, ctx.start, ctx.end, addMetricSource, addMetricType, [], null, null);
+      return api.getSupplementalMetric({ iterations: ctx.iterations, start: ctx.start, end: ctx.end, source: addMetricSource, type: addMetricType });
     }).then(function (res) {
       setSupplementalMetrics(function (prev) {
         return prev.concat([{
@@ -424,7 +425,7 @@ export default function CompareView({ selected, groupByList, setGroupByList, ser
     });
     var ctx = getRunContext();
     timeWork('Breakout ' + sm.source + '::' + sm.type + ' by ' + breakoutName, function () {
-      return api.getSupplementalMetric(ctx.runIds, ctx.start, ctx.end, sm.source, sm.type, newBreakouts, sm.filter, sm.sampleIndex);
+      return api.getSupplementalMetric({ iterations: ctx.iterations, start: ctx.start, end: ctx.end, source: sm.source, type: sm.type, breakout: newBreakouts, filter: sm.filter, sampleIndex: sm.sampleIndex });
     }).then(function (res) {
       setSupplementalMetrics(function (prev) {
         var next = prev.slice();
@@ -457,7 +458,7 @@ export default function CompareView({ selected, groupByList, setGroupByList, ser
     });
     var ctx = getRunContext();
     timeWork('Remove breakout from ' + sm.source + '::' + sm.type, function () {
-      return api.getSupplementalMetric(ctx.runIds, ctx.start, ctx.end, sm.source, sm.type, newBreakouts, sm.filter, sm.sampleIndex);
+      return api.getSupplementalMetric({ iterations: ctx.iterations, start: ctx.start, end: ctx.end, source: sm.source, type: sm.type, breakout: newBreakouts, filter: sm.filter, sampleIndex: sm.sampleIndex });
     }).then(function (res) {
       setSupplementalMetrics(function (prev) {
         var next = prev.slice();
@@ -483,7 +484,7 @@ export default function CompareView({ selected, groupByList, setGroupByList, ser
     });
     var ctx = getRunContext();
     timeWork('Switch sample for ' + sm.source + '::' + sm.type, function () {
-      return api.getSupplementalMetric(ctx.runIds, ctx.start, ctx.end, sm.source, sm.type, sm.breakouts, sm.filter, idx);
+      return api.getSupplementalMetric({ iterations: ctx.iterations, start: ctx.start, end: ctx.end, source: sm.source, type: sm.type, breakout: sm.breakouts, filter: sm.filter, sampleIndex: idx });
     }).then(function (res) {
       setSupplementalMetrics(function (prev) {
         var next = prev.slice();
@@ -524,7 +525,7 @@ export default function CompareView({ selected, groupByList, setGroupByList, ser
     });
     var ctx = getRunContext();
     timeWork('Apply filter for ' + sm.source + '::' + sm.type, function () {
-      return api.getSupplementalMetric(ctx.runIds, ctx.start, ctx.end, sm.source, sm.type, sm.breakouts, sm.filter, sm.sampleIndex);
+      return api.getSupplementalMetric({ iterations: ctx.iterations, start: ctx.start, end: ctx.end, source: sm.source, type: sm.type, breakout: sm.breakouts, filter: sm.filter, sampleIndex: sm.sampleIndex });
     }).then(function (res) {
       setSupplementalMetrics(function (prev) {
         var next = prev.slice();
@@ -566,7 +567,7 @@ export default function CompareView({ selected, groupByList, setGroupByList, ser
     });
     var ctx = getRunContext();
     timeWork('Apply breakout filter for ' + sm.source + '::' + sm.type, function () {
-      return api.getSupplementalMetric(ctx.runIds, ctx.start, ctx.end, sm.source, sm.type, sm.breakouts, sm.filter, sm.sampleIndex);
+      return api.getSupplementalMetric({ iterations: ctx.iterations, start: ctx.start, end: ctx.end, source: sm.source, type: sm.type, breakout: sm.breakouts, filter: sm.filter, sampleIndex: sm.sampleIndex });
     }).then(function (res) {
       setSupplementalMetrics(function (prev) {
         var next = prev.slice();
