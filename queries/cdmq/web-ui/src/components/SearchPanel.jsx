@@ -359,7 +359,7 @@ const SearchPanel = forwardRef(function SearchPanel({ iterations, onResults, onE
         </div>
         <div className="field field-date-range">
           <label>Date Range</label>
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <div className="date-range-row">
             <AutocompleteInput
               value={filters.start}
               onChange={(v) => updateFilter('start', v)}
@@ -369,7 +369,7 @@ const SearchPanel = forwardRef(function SearchPanel({ iterations, onResults, onE
               onFocus={() => loadOptions('months', 'months')}
               onKeyDown={handleKeyDown}
             />
-            <span style={{ color: 'var(--text-secondary)' }}>to</span>
+            <span className="date-range-separator">to</span>
             <AutocompleteInput
               value={filters.end}
               onChange={(v) => updateFilter('end', v)}

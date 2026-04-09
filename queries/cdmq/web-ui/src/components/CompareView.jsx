@@ -898,7 +898,8 @@ export default function CompareView({ selected, groupByList, setGroupByList, ser
             })}
           </select>
         </div>
-        <div className="compare-control-spacer" />
+      </div>
+      <div className="compare-add-metric-bar">
         {!showAddMetric && (
           <button className="btn btn-sm btn-secondary" onClick={handleShowAddMetric}>
             + Add Metric
