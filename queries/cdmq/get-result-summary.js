@@ -244,16 +244,14 @@ async function main() {
       process.exit(1);
     }
 
-    // Fetch iteration-level data in parallel: params, primary-period-name, samples, primary-metric
+    // Fetch iteration-level data sequentially to avoid overwhelming OpenSearch
     var iterBody = { iterations: benchIterations };
     var paramsResp, periodNamesResp, samplesResp, primaryMetricsResp;
     try {
-      [paramsResp, periodNamesResp, samplesResp, primaryMetricsResp] = await Promise.all([
-        apiPost(baseUrl, runPrefix + '/iterations/params', iterBody),
-        apiPost(baseUrl, runPrefix + '/iterations/primary-period-name', iterBody),
-        apiPost(baseUrl, runPrefix + '/iterations/samples', iterBody),
-        apiPost(baseUrl, runPrefix + '/iterations/primary-metric', iterBody)
-      ]);
+      paramsResp = await apiPost(baseUrl, runPrefix + '/iterations/params', iterBody);
+      periodNamesResp = await apiPost(baseUrl, runPrefix + '/iterations/primary-period-name', iterBody);
+      samplesResp = await apiPost(baseUrl, runPrefix + '/iterations/samples', iterBody);
+      primaryMetricsResp = await apiPost(baseUrl, runPrefix + '/iterations/primary-metric', iterBody);
     } catch (error) {
       console.error('Error fetching iteration data for run ' + runId + ': ' + error.message);
       process.exit(1);
@@ -263,16 +261,14 @@ async function main() {
     var iterSampleIds = samplesResp.samples;
     var iterPrimaryMetrics = primaryMetricsResp.primaryMetrics;
 
-    // Fetch sample-level data: statuses and primary period IDs
+    // Fetch sample-level data sequentially
     var statusesResp, periodIdsResp;
     try {
-      [statusesResp, periodIdsResp] = await Promise.all([
-        apiPost(baseUrl, runPrefix + '/samples/statuses', { sampleIds: iterSampleIds }),
-        apiPost(baseUrl, runPrefix + '/samples/primary-period-id', {
-          sampleIds: iterSampleIds,
-          periodNames: iterPrimaryPeriodNames
-        })
-      ]);
+      statusesResp = await apiPost(baseUrl, runPrefix + '/samples/statuses', { sampleIds: iterSampleIds });
+      periodIdsResp = await apiPost(baseUrl, runPrefix + '/samples/primary-period-id', {
+        sampleIds: iterSampleIds,
+        periodNames: iterPrimaryPeriodNames
+      });
     } catch (error) {
       console.error('Error fetching sample data for run ' + runId + ': ' + error.message);
       process.exit(1);
@@ -395,33 +391,22 @@ async function main() {
     // Fetch metric data in batches
     var batchedQuerySize = 10;
     var metricDataResults = new Array(sets.length);
-    for (var batchStart = 0; batchStart < sets.length; batchStart += batchedQuerySize) {
-      var batchEnd = Math.min(batchStart + batchedQuerySize, sets.length);
-      var batchPromises = [];
-      for (var b = batchStart; b < batchEnd; b++) {
-        var s = sets[b];
-        batchPromises.push(
-          apiPost(baseUrl, '/api/v1/metric-data', {
-            run: s.run,
-            period: s.period,
-            source: s.source,
-            type: s.type,
-            begin: s.begin,
-            end: s.end,
-            resolution: s.resolution,
-            breakout: s.breakout
-          })
-        );
-      }
-      var batchResults;
+    for (var b = 0; b < sets.length; b++) {
+      var s = sets[b];
       try {
-        batchResults = await Promise.all(batchPromises);
+        metricDataResults[b] = await apiPost(baseUrl, '/api/v1/metric-data', {
+          run: s.run,
+          period: s.period,
+          source: s.source,
+          type: s.type,
+          begin: s.begin,
+          end: s.end,
+          resolution: s.resolution,
+          breakout: s.breakout
+        });
       } catch (error) {
         console.error('Error fetching metric data for run ' + runId + ': ' + error.message);
         process.exit(1);
-      }
-      for (var b = 0; b < batchResults.length; b++) {
-        metricDataResults[batchStart + b] = batchResults[b];
       }
     }
 
