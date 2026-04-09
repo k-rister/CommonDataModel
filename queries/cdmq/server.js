@@ -1163,108 +1163,37 @@ app.post('/api/v1/iterations/supplemental-metric', async (req, res) => {
         if (typeof periodRanges === 'undefined') periodRanges = [];
       }
 
-      // Fetch primary metric values per sample to determine best sample
-      var primaryMetrics = await cdm.mgetPrimaryMetric(inst, allIterIds, ydm);
-
-      // For each iteration, determine which sample to use and build metric sets
+      // Build metric sets — use the requested sample index (client determines best sample)
+      // sampleIndex is an index into the passing samples array for each iteration
       var metricSets = [];
       var metricSetMap = [];
       for (var i = 0; i < allIterIds.length; i++) {
         var iterPeriodIds = (primaryPeriodIds[i]) || [];
         var iterRanges = (periodRanges[i]) || [];
-        var numSamples = iterPeriodIds.length;
-        if (numSamples === 0) continue;
+        if (iterPeriodIds.length === 0) continue;
 
-        // Build sample info: get primary metric value per sample
-        // We need to query the primary metric for each sample to get per-sample values
-        var pm = (primaryMetrics && primaryMetrics[i]) || null;
-        var pmParts = pm && typeof pm === 'string' ? pm.split('::') : [];
-        var iterSampleInfo = [];
+        // Use requested sample index, defaulting to 0
+        var selIdx = (requestedSampleIdx !== null && requestedSampleIdx < iterPeriodIds.length) ? requestedSampleIdx : 0;
 
-        // Query primary metric for each sample to get per-sample values
-        var pmSets = [];
-        for (var s = 0; s < numSamples; s++) {
-          if (!iterPeriodIds[s]) continue;
-          var range = iterRanges[s];
-          if (!range || !range.begin || !range.end) continue;
-          if (pmParts.length >= 2) {
-            pmSets.push({
-              run: iterRunIds[i],
-              period: iterPeriodIds[s],
-              source: pmParts[0],
-              type: pmParts[1],
-              begin: range.begin,
-              end: range.end,
-              resolution: 1,
-              breakout: []
-            });
-          }
-          iterSampleInfo.push({ index: s, periodId: iterPeriodIds[s], range: range, primaryMetricValue: null });
-        }
+        if (!iterPeriodIds[selIdx]) continue;
+        var range = iterRanges[selIdx];
+        if (!range || !range.begin || !range.end) continue;
 
-        // Fetch primary metric values for this iteration's samples
-        if (pmSets.length > 0) {
-          var pmResp = await cdm.getMetricDataSets(inst, pmSets, ydm);
-          if (pmResp['ret-code'] === 0 && pmResp['data-sets']) {
-            for (var ps = 0; ps < pmResp['data-sets'].length; ps++) {
-              var pmDs = pmResp['data-sets'][ps];
-              if (pmDs && pmDs.values) {
-                var pmKeys = Object.keys(pmDs.values);
-                if (pmKeys.length > 0 && pmDs.values[pmKeys[0]].length > 0) {
-                  iterSampleInfo[ps].primaryMetricValue = pmDs.values[pmKeys[0]][0].value;
-                }
-              }
-            }
-          }
-        }
+        // Store sample count for this iteration
+        sampleInfo[allIterIds[i]] = { sampleCount: iterPeriodIds.length, selectedIndex: selIdx };
 
-        // Determine selected sample
-        var selectedSampleIdx;
-        if (requestedSampleIdx !== null && requestedSampleIdx < iterSampleInfo.length) {
-          selectedSampleIdx = requestedSampleIdx;
-        } else {
-          // Auto-select: sample closest to mean primary metric
-          var pmVals = iterSampleInfo.map(function (si) { return si.primaryMetricValue; }).filter(function (v) { return v !== null; });
-          if (pmVals.length > 0) {
-            var pmSum = 0;
-            for (var v = 0; v < pmVals.length; v++) pmSum += pmVals[v];
-            var pmMean = pmSum / pmVals.length;
-            var bestIdx = 0;
-            var bestDiff = Infinity;
-            for (var si2 = 0; si2 < iterSampleInfo.length; si2++) {
-              if (iterSampleInfo[si2].primaryMetricValue !== null) {
-                var diff = Math.abs(iterSampleInfo[si2].primaryMetricValue - pmMean);
-                if (diff < bestDiff) { bestDiff = diff; bestIdx = si2; }
-              }
-            }
-            selectedSampleIdx = bestIdx;
-          } else {
-            selectedSampleIdx = 0;
-          }
-        }
-
-        // Store sample info for this iteration
-        sampleInfo[allIterIds[i]] = {
-          samples: iterSampleInfo.map(function (si) { return { index: si.index, primaryMetricValue: si.primaryMetricValue }; }),
-          selectedIndex: selectedSampleIdx,
-        };
-
-        // Build metric set for the selected sample only
-        var sel = iterSampleInfo[selectedSampleIdx];
-        if (sel && sel.periodId && sel.range && sel.range.begin && sel.range.end) {
-          metricSets.push({
-            run: iterRunIds[i],
-            period: sel.periodId,
-            source: source,
-            type: type,
-            begin: sel.range.begin,
-            end: sel.range.end,
-            resolution: 1,
-            breakout: breakoutArr.slice(),
-            filter: filterVal
-          });
-          metricSetMap.push(i);
-        }
+        metricSets.push({
+          run: iterRunIds[i],
+          period: iterPeriodIds[selIdx],
+          source: source,
+          type: type,
+          begin: range.begin,
+          end: range.end,
+          resolution: 1,
+          breakout: breakoutArr.slice(),
+          filter: filterVal
+        });
+        metricSetMap.push(i);
       }
 
       if (metricSets.length > 0) {

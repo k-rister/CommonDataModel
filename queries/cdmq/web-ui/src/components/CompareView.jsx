@@ -382,14 +382,36 @@ export default function CompareView({ selected, groupByList, setGroupByList, ser
     }
   }, [iterations]);
 
+  // Compute best sample index from primary metric values (closest to mean)
+  function computeBestSampleIndex() {
+    // Find the most common sample count and compute best index from first iteration with values
+    var bestIdx = 0;
+    for (var itId in metricValues) {
+      var mv = metricValues[itId];
+      if (mv && mv.sampleValues && mv.sampleValues.length > 1) {
+        var sum = 0;
+        for (var v = 0; v < mv.sampleValues.length; v++) sum += mv.sampleValues[v];
+        var mean = sum / mv.sampleValues.length;
+        var bestDiff = Infinity;
+        for (var s = 0; s < mv.sampleValues.length; s++) {
+          var diff = Math.abs(mv.sampleValues[s] - mean);
+          if (diff < bestDiff) { bestDiff = diff; bestIdx = s; }
+        }
+        break; // Use the first iteration's best sample as default
+      }
+    }
+    return bestIdx;
+  }
+
   var handleAddMetric = useCallback(function () {
     if (!addMetricSource || !addMetricType) return;
     var exists = supplementalMetrics.some(function (m) { return m.source === addMetricSource && m.type === addMetricType; });
     if (exists) { setShowAddMetric(false); return; }
     var ctx = getRunContext();
+    var bestIdx = computeBestSampleIndex();
     setAddMetricLoading(true);
     timeWork('Fetch ' + addMetricSource + '::' + addMetricType, function () {
-      return api.getSupplementalMetric({ iterations: ctx.iterations, start: ctx.start, end: ctx.end, source: addMetricSource, type: addMetricType });
+      return api.getSupplementalMetric({ iterations: ctx.iterations, start: ctx.start, end: ctx.end, source: addMetricSource, type: addMetricType, sampleIndex: bestIdx });
     }).then(function (res) {
       setSupplementalMetrics(function (prev) {
         return prev.concat([{
@@ -399,8 +421,7 @@ export default function CompareView({ selected, groupByList, setGroupByList, ser
           display: addMetricDisplay,
           chartType: 'bar',         // 'bar', 'stacked', 'line'
           filter: '',               // e.g., 'gt:0.01', 'lt:100'
-          sampleIndex: null,        // null = auto-best, number = specific sample
-          sampleInfo: res.sampleInfo || {},  // { iterationId: { samples: [...], selectedIndex } }
+          sampleIndex: bestIdx,     // client-computed best sample
           breakouts: [],            // active breakout dimensions
           remainingBreakouts: res.remainingBreakouts || [],
           loading: false,
@@ -475,7 +496,7 @@ export default function CompareView({ selected, groupByList, setGroupByList, ser
   }, [iterations, supplementalMetrics]);
 
   var handleSampleChange = useCallback(function (si, newSampleIndex) {
-    var idx = newSampleIndex === 'auto' ? null : parseInt(newSampleIndex, 10);
+    var idx = newSampleIndex === 'auto' ? computeBestSampleIndex() : parseInt(newSampleIndex, 10);
     var sm = supplementalMetrics[si];
     setSupplementalMetrics(function (prev) {
       var next = prev.slice();
@@ -950,11 +971,18 @@ export default function CompareView({ selected, groupByList, setGroupByList, ser
                       <option value="line">Lines</option>
                     </select>
                   )}
-                  {sm.sampleInfo && Object.keys(sm.sampleInfo).length > 0 && (function () {
-                    // Show sample selector — use first iteration's sample info as representative
-                    var firstIterId = Object.keys(sm.sampleInfo)[0];
-                    var si2 = sm.sampleInfo[firstIterId];
-                    if (!si2 || !si2.samples || si2.samples.length <= 1) return null;
+                  {(function () {
+                    // Show sample selector using primary metric values from metricValues
+                    // Find first iteration with multiple samples
+                    var sampleVals = null;
+                    for (var ii = 0; ii < iterations.length; ii++) {
+                      var mv2 = metricValues[iterations[ii].iterationId];
+                      if (mv2 && mv2.sampleValues && mv2.sampleValues.length > 1) {
+                        sampleVals = mv2.sampleValues;
+                        break;
+                      }
+                    }
+                    if (!sampleVals || sampleVals.length <= 1) return null;
                     return (
                       <span className="compare-filter-group">
                         <label className="compare-filter-label">Sample:</label>
@@ -964,11 +992,9 @@ export default function CompareView({ selected, groupByList, setGroupByList, ser
                           onChange={function (e) { handleSampleChange(si, e.target.value); }}
                         >
                           <option value="auto">Best (auto)</option>
-                          {si2.samples.map(function (samp, idx2) {
-                            var pmv = samp.primaryMetricValue;
+                          {sampleVals.map(function (pmv, idx2) {
                             var label2 = 'Sample ' + (idx2 + 1);
                             if (pmv != null) label2 += ' (' + formatValue(pmv) + ')';
-                            if (idx2 === si2.selectedIndex && sm.sampleIndex == null) label2 += ' *';
                             return <option key={idx2} value={idx2}>{label2}</option>;
                           })}
                         </select>
@@ -1147,7 +1173,7 @@ export default function CompareView({ selected, groupByList, setGroupByList, ser
                                   var prefix = dataKey + '_';
                                   return Object.keys(entry).filter(function (k) {
                                     return k.startsWith(prefix) && !k.endsWith('_stddevPct') && !k.endsWith('_error') && !k.endsWith('_samples');
-                                  }).sort().map(function (k, ki) {
+                                  }).sort(naturalCompare).map(function (k, ki) {
                                     var labelName = k.substring(prefix.length);
                                     var v = entry[k];
                                     var barColor = SUPP_COLORS[(si + ki) % SUPP_COLORS.length];
@@ -1193,7 +1219,7 @@ export default function CompareView({ selected, groupByList, setGroupByList, ser
                               }
                             });
                           });
-                          var labels = Array.from(labelSet).sort();
+                          var labels = Array.from(labelSet).sort(naturalCompare);
                           var ct = sm.chartType || 'bar';
                           if (labels.length > 0) {
                             return labels.map(function (lk, li) {
@@ -1354,7 +1380,7 @@ export default function CompareView({ selected, groupByList, setGroupByList, ser
                         }
                       });
                     });
-                    return Array.from(labelSet).map(function (lk, li) {
+                    return Array.from(labelSet).sort(naturalCompare).map(function (lk, li) {
                       var labelName = lk.substring(('supp_' + si + '_').length);
                       return (
                         <Line
