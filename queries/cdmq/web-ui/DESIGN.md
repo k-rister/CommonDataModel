@@ -243,8 +243,9 @@ The text input at the top filters iterations by param name/value:
 2. Click "Compare (N)" button in the nav bar
 3. Primary metric values auto-fetched
 4. Bar chart displayed with one bar per iteration
-5. Use Group-by and Series-by dropdowns to organize bars
+5. Group-by auto-populated (sorted by distinct value count, fewest first)
 6. Add supplemental metrics via "+ Add Metric"
+7. Click a bar to pin it — shows values in sidebars, dims other bars
 
 ### Chart Architecture
 
@@ -253,19 +254,18 @@ The chart uses Recharts' `ComposedChart` which supports mixing Bar and Line comp
 **Chart data entry structure:**
 ```javascript
 {
-  name: "wsize=64, nthreads=1",  // X-axis label (only varying, non-grouped params/tags)
-  value: 1234.56,                // Primary metric mean
-  errorY: 23.4,                  // Stddev for error bars
+  name: "wsize=64",             // X-axis label (only remaining varying params/tags)
+  value: 1234.56,               // Primary metric mean
+  errorY: 23.4,                 // Stddev for error bars
   iterationId: "uuid",
-  groupValue: "nthreads=1",      // Group dimension value
-  seriesValue: "gro=on",         // Series dimension value
-  color: "#5b8def",              // Bar fill color
-  isGap: false,                  // Gap entries for visual separation
-  'supp_0': 0.42,               // Supplemental metric 0 value
+  groupValue: "nthreads=1, protocol=tcp",  // Compound group key
+  color: "#5b8def",             // Bar fill color
+  isGap: false,                 // Gap entries for visual separation
+  'supp_0': 0.42,              // Supplemental metric 0 value
   'supp_0_stddevPct': 1.5,
   'supp_0_error': 0.006,
   'supp_0_samples': 3,
-  'supp_0_<rx>': 5.2,           // Breakout label values (when breakouts active)
+  'supp_0_<rx>': 5.2,          // Breakout label values (when breakouts active)
   'supp_0_<tx>': 3.8,
 }
 ```
@@ -275,24 +275,44 @@ The chart uses Recharts' `ComposedChart` which supports mixing Bar and Line comp
 The chart applies a hierarchical approach to reduce label redundancy:
 
 1. **Chart subtitle**: Globally common params/tags/benchmark (same across all selected iterations)
-2. **Group headers** (tab-like bars above chart): Group-by dimension value + per-group common items
-3. **Bar labels** (X-axis): Only params/tags that vary within each group, excluding group-by dimension and per-group common items
-4. **Legend**: Series-by dimension value-to-color mapping
+2. **Hierarchical group headers**: Each group-by dimension gets its own row above the chart. Each row shows the dimension name on the left and value labels spanning the bars they cover, creating a pivot-table-like header.
+3. **Bar labels** (X-axis): Only the remaining varying dimension(s) not used in group-by
+4. **Bar value labels**: Metric values shown inside bars when they fit (checked against bar width and height). Hidden automatically when bars are too narrow.
+5. **Value consolidation**: Params/tags with the same value are grouped in labels (e.g., `bs,rw,size=4k` instead of repeating `=4k` three times)
 
-**Example:** If you group by `param:nthreads` and series by `tag:gro`:
-- Subtitle: `benchmark=uperf, protocol=tcp` (common to all)
-- Group headers: `nthreads=1` (with `wsize=64` if wsize is the same within that group), `nthreads=8`
-- Bar labels: Only remaining varying dimensions (e.g., `wsize=256`)
-- Legend: `gro=on` (blue), `gro=off` (green)
+### Auto-Grouping
+
+When entering the compare view, group-by dimensions are auto-populated:
+1. `buildDimOptions()` scans iterations for varying dimensions only
+2. Dimensions sorted by distinct value count (fewest first — best grouping levels)
+3. All but the last dimension become group-by levels
+4. The last dimension stays as the bar label
+5. User can reorder chips with left/right arrow buttons
+6. "Auto" button recomputes; "Clear" removes all
+
+### Hide Fields
+
+Users can hide specific params/tags from the compare view:
+- Hidden fields excluded from group-by/series-by dropdowns, common/varying computation, and bar labels
+- Shown as red strikethrough chips
+- Hiding auto-removes from group-by if currently used
+
+### Click-to-Pin and Selection Indicators
+
+- **Click a bar** in the primary chart to pin its data in all sidebars
+- **Red dashed ReferenceLine** appears at the selected bar's position in all chart panels
+- **Non-selected bars dim to 20% opacity** across all panels
+- Click the same bar again to unpin
 
 ### Grouping Implementation
 
 1. `buildDimOptions()` scans iterations for varying dimensions only (>1 distinct value) — common dimensions are excluded from dropdowns
-2. Iterations sorted by `naturalCompare` (numeric-aware: 64 before 256 before 1024)
-3. Per-group common items computed: params/tags that vary globally but are constant within a group
-4. `buildIterLabel()` excludes group-by dimension and per-group common items from bar labels
-5. Gap entries (`{ isGap: true }`) inserted between groups for visual separation
-6. Group headers rendered as proportionally-sized tabs above the chart using flex layout
+2. Multi-group-by: `groupByList` is an array of dimension strings, compound key computed by `getCompoundGroupValue()`
+3. Iterations sorted by compound group key using `naturalCompare` (numeric-aware: 64 before 256 before 1024)
+4. Per-group common items computed: params/tags that vary globally but are constant within a group
+5. `buildIterLabel()` excludes all group-by dimensions and per-group common items from bar labels; consolidates params with same value
+6. Gap entries (`{ isGap: true }`) inserted between groups for visual separation
+7. Hierarchical headers rendered inside `compare-chart-area` with matching chart margins
 
 ### Y-Axis Management
 
@@ -302,6 +322,7 @@ The chart applies a hierarchical approach to reduce label redundancy:
 - **Alignment**: Hidden right Y-axis (width=80 or width=1) added to all charts so bars align across panels
 - **HTML labels**: Y-axis metric names rendered as HTML `<div>` elements outside the SVG to avoid Recharts clip-path issues
 - **Tick formatting**: `formatYTick()` adapts precision based on magnitude (e.g., "1.2k", "0.423", "80")
+- **Sidebar**: Each chart panel has a sidebar (300px) showing pinned iteration values
 
 ---
 
@@ -319,11 +340,22 @@ The chart applies a hierarchical approach to reduce label redundancy:
 
 Each added metric is displayed as a row with:
 - Colored left border (consistent color across chart and panel)
-- Metric name (source::type)
-- Display mode label ("overlay" or "panel")
+- Metric name (source::type) in monospace font
+- Display mode badge ("overlay" or "panel")
 - **+ Breakout** dropdown (populated with `remainingBreakouts` from server)
+- **Chart type** selector (Bars, Stacked, Lines) — visible when breakouts are active
+- **Sample** selector — choose which sample to display (auto-selects the sample closest to the primary metric mean)
+- **Filter** input — accepts `gt:N`, `ge:N`, `lt:N`, `le:N` syntax for server-side label filtering
 - Remove button (x)
-- Active breakout chips (removable)
+- Active breakout chips with editable filter values
+
+### Per-Sample Selection
+
+Supplemental metrics query a single sample instead of averaging across all:
+- Client computes the best sample index from `metricValues.sampleValues` (closest to mean)
+- Server uses the provided `sampleIndex` directly
+- Sample dropdown shows each sample's primary metric value for reference
+- Filters work correctly since they operate on single-sample data
 
 ### Breakout Workflow
 
@@ -331,9 +363,11 @@ Each added metric is displayed as a row with:
 2. Client re-queries the metric with `breakout: ["direction"]`
 3. Server returns multi-label values: `{ "<rx>": { mean, ... }, "<tx>": { mean, ... } }`
 4. Server also returns updated `remainingBreakouts` for further drilling
-5. Chart renders one bar/line per label
+5. Chart renders one bar/line per label; chart type selectable (Bars/Stacked/Lines)
 6. User can add another breakout level (e.g., "hostname") — labels become `"<rx>-<host1>"`, etc.
-7. Removing a breakout re-queries with the reduced breakout array
+7. Breakout chips have editable filter inputs accepting exact values, `val1+val2`, `r/regex/`, or `R/regex/`
+8. "Apply" button re-queries with the filter applied
+9. Removing a breakout re-queries with the reduced breakout array
 
 ### Data Format
 
@@ -351,11 +385,39 @@ The empty string label `""` with no breakouts is correct — it means there's no
 
 ### Chart Rendering with Breakouts
 
-**Panel mode:** Each label becomes its own `<Bar>` component with a distinct color.
+**Panel mode:** Each label becomes its own `<Bar>` component with a distinct color. Chart type selectable:
+- **Bars**: Side-by-side bars per breakout label
+- **Stacked**: Bars stacked using Recharts `stackId`
+- **Lines**: Line chart with dots per breakout label
 
 **Overlay mode:** Each label becomes its own `<Line>` component on the right Y-axis.
 
+**Supplemental panels render below the primary chart** so the primary chart with its X-axis labels appears first.
+
 Label detection is done dynamically by scanning chart data entry keys for the pattern `supp_{index}_{label}` (excluding keys ending in `_stddevPct`, `_error`, `_samples`).
+
+### Breakout Sidebar (Value Legend)
+
+When a bar is clicked (pinned), each chart panel shows a sidebar with metric values:
+
+- **No breakouts**: Simple label + value display
+- **With breakouts**: Table layout with rowSpan for repeated segment values (like the iteration table's run grouping)
+  - Column headers from breakout dimension names
+  - Labels parsed into `<segment>` patterns and grouped hierarchically
+  - Common text suffixes stripped and shown in header (e.g., `.local.net` removed from hostnames)
+  - Common text prefixes stripped if no suffix found (e.g., `host-` removed)
+  - Numeric-only columns skip deduplication
+  - Delimiter-boundary detection (`.`, `-`, `_`, `/`) prevents splitting words
+
+### Bar Value Labels
+
+Metric values are displayed inside bars when they fit:
+- `formatBarLabel()` produces compact values (3-4 significant digits, k/M suffixes)
+- Custom `<LabelList>` content function checks `props.width` and `props.height` against text width estimate
+- **Side-by-side bars**: shown if bar width > text width + 4px AND height > 16px
+- **Stacked bars**: shown if segment height > 14px
+- **Lines**: labels always skipped
+- Font: 12px bold monospace, white with 90% opacity
 
 ---
 
@@ -423,21 +485,21 @@ http://host:3000/#%7B%22benchmark%22%3A%22uperf%22%2C%22start%22%3A%222026.01%22
   params: [{ arg: "wsize", val: "64,256" }],
   selectedRuns: ["uuid1", "uuid2"],  // Run IDs (not iteration IDs — much shorter)
   view: "compare",
-  groupBy: "param:nthreads",
-  seriesBy: "tag:gro"
+  groupBy: ["param:nthreads", "param:protocol"]  // Array of group-by dimensions
 }
 ```
 
 ### Restoration Flow
 
 1. On mount: `decodeState(window.location.hash)` parsed, stored in `restoredState.current`
-2. `groupBy`/`seriesBy` set immediately
+2. `groupByList` set immediately (handles both array and legacy single-string format)
 3. `view` NOT set yet (deferred until search completes)
 4. After SearchPanel mounts: `setFiltersAndSearch(filters)` called via ref
 5. SearchPanel updates filters, triggers search via `pendingSearch` ref + useEffect
 6. `handleSearchResults` receives results, auto-selects iterations from matching run IDs
 7. View switched to saved view (e.g., "compare")
 8. `restoredState.current` cleared to prevent re-application on next search
+9. If no groupByList was saved, auto-group runs on CompareView mount
 
 **Key design decision:** View switch is deferred until after search + selection to avoid showing an empty Compare view while data is loading.
 
@@ -493,8 +555,14 @@ The `/iterations/details` endpoint accepts `{ runIds, start, end }` and returns 
 | POST | `/api/v1/iterations/metric-types` | Types for a given source |
 | POST | `/api/v1/iterations/supplemental-metric` | Fetch metric values with optional breakouts |
 
-The supplemental-metric endpoint:
-1. Discovers iterations and their passing samples
+The supplemental-metric endpoint accepts `{ iterations, runIds, start, end, source, type, breakout, filter, sampleIndex }`:
+- `iterations`: array of `{iterationId, runId}` for targeted queries (avoids discovering all iterations from runIds)
+- `sampleIndex`: which sample to query (client computes best sample from primary metric values)
+- `breakout`: array of breakout dimensions with optional filters
+- `filter`: value filter (gt:N, ge:N, lt:N, le:N)
+
+Processing:
+1. Uses provided iteration IDs directly (or discovers from runIds as fallback)
 2. Gets primary period IDs and ranges
 3. Builds metric data sets with the specified source, type, and breakouts
 4. Calls `cdm.getMetricDataSets()` to fetch from OpenSearch
@@ -590,14 +658,14 @@ Primary metric values are NOT loaded with iteration details (would add ~7 second
 ### Current Limitations
 
 - **Phase 3 (Deep Dive):** Time-series line charts are not yet implemented
-- **Breakout filters:** Breakout dimensions can be selected but not filtered to specific values (e.g., `package=0`). The data structures support this for future implementation.
-- **Panel alignment with overlays:** Slight misalignment can occur when one chart has an overlay right Y-axis and another doesn't, despite hidden Y-axis placeholders
 - **Large result sets:** Searching across many months with hundreds of runs can be slow due to sequential OpenSearch queries
 - **Bundle size:** Recharts adds ~400KB to the bundle. Code splitting could help.
+- **Breakout label parsing:** CDM may omit breakout dimensions with single values from labels, making label-to-dimension mapping imperfect. The sidebar uses segment-based grouping to work around this.
+- **Supplemental metric in URL state:** Currently supplemental metrics, breakouts, and hidden fields are not encoded in the Share URL
 
 ### Planned Features
 
-- **Breakout value filters:** Allow `breakout=["package=0"]` to filter to specific breakout values
 - **Deep Dive view:** Time-series line charts with zoom/pan and interactive breakout exploration
 - **Save/load workflows:** Server-side or localStorage persistence of named workflows
-- **Supplemental metric in URL state:** Currently supplemental metrics and breakouts are not encoded in the Share URL
+- **Supplemental metrics in URL state:** Encode added metrics, breakouts, and display modes in the Share URL
+- **Drag-to-reorder:** Group-by chips currently use arrow buttons; drag-and-drop would be more intuitive
