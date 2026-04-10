@@ -1193,7 +1193,7 @@ a.run-id:hover {
 
 /* Sidebar data panel */
 .compare-sidebar {
-  width: 160px;
+  width: 300px;
   flex-shrink: 0;
   padding: 8px 12px;
   border-left: 1px solid var(--border);
@@ -1242,6 +1242,83 @@ a.run-id:hover {
   font-size: 14px;
   font-weight: 700;
   font-family: 'SF Mono', ui-monospace, Consolas, monospace;
+}
+
+/* Compact breakout rows */
+.compare-sidebar-breakout-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 6px;
+  padding: 1px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.compare-sidebar-breakout-row:last-child {
+  border-bottom: none;
+}
+
+.compare-sidebar-breakout-label {
+  font-size: 10px;
+  font-family: 'SF Mono', ui-monospace, Consolas, monospace;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
+}
+
+.compare-sidebar-breakout-value {
+  font-size: 12px;
+  font-weight: 700;
+  font-family: 'SF Mono', ui-monospace, Consolas, monospace;
+  flex-shrink: 0;
+}
+
+/* Hierarchical breakout groups in sidebar */
+.compare-sidebar-group {
+  border-left: 2px solid var(--border);
+  padding-left: 6px;
+  margin-bottom: 2px;
+}
+
+.compare-sidebar-group-header {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  margin-bottom: 1px;
+}
+
+.compare-sidebar-group-dim {
+  font-size: 8px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.compare-sidebar-group-val {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.compare-sidebar-group-value {
+  font-size: 12px;
+  font-weight: 700;
+  font-family: 'SF Mono', ui-monospace, Consolas, monospace;
+  margin-left: auto;
+}
+
+.compare-sidebar-group-children {
+  padding-left: 4px;
+}
+
+.compare-sidebar-leaf {
+  font-size: 12px;
+  font-weight: 700;
+  font-family: 'SF Mono', ui-monospace, Consolas, monospace;
+  padding: 1px 0;
 }
 
 /* Iteration selector */

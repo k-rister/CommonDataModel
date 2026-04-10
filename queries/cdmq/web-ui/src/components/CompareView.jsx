@@ -269,6 +269,90 @@ function hasGroupBy(groupByList) {
   return groupByList && groupByList.length > 0;
 }
 
+// Parse a breakout label like "<host1>-<0>" into segments ["<host1>", "<0>"]
+function parseBreakoutSegments(label) {
+  if (!label) return [];
+  // Match all <...> segments
+  var matches = label.match(/<[^>]*>/g);
+  return matches || [label];
+}
+
+// Recursively group items by their label segments and render as nested divs
+// items: [{ segments: ["<host1>", "<0>"], value: "45.2", color: "#..." }, ...]
+// depth: which segment index to group by
+function renderGroupedBreakouts(items, depth) {
+  if (items.length === 0) return null;
+
+  // If all items have no more segments at this depth, render as leaves
+  if (items.every(function (it) { return depth >= it.segments.length; })) {
+    return items.map(function (it, ii) {
+      return (
+        <div key={ii} className="compare-sidebar-breakout-row" style={{ color: it.color }}>
+          <span className="compare-sidebar-breakout-value">{it.value}</span>
+        </div>
+      );
+    });
+  }
+
+  // Get the segment value at this depth for each item
+  // Group items by their segment at this depth
+  var groups = {};
+  var groupOrder = [];
+  items.forEach(function (it) {
+    var seg = depth < it.segments.length ? it.segments[depth] : '__none__';
+    // Strip angle brackets for display
+    var display = seg.replace(/^</, '').replace(/>$/, '');
+    if (!groups[display]) {
+      groups[display] = [];
+      groupOrder.push(display);
+    }
+    groups[display].push(it);
+  });
+
+  groupOrder.sort(naturalCompare);
+
+  // If there's only one group value at this depth, it's common — show as header and recurse
+  if (groupOrder.length === 1) {
+    var commonVal = groupOrder[0];
+    return (
+      <div className="compare-sidebar-group">
+        <div className="compare-sidebar-group-header">
+          <span className="compare-sidebar-group-val">{commonVal}</span>
+        </div>
+        <div className="compare-sidebar-group-children">
+          {renderGroupedBreakouts(groups[commonVal], depth + 1)}
+        </div>
+      </div>
+    );
+  }
+
+  // Multiple groups — render each as a distinct section
+  return groupOrder.map(function (gv) {
+    var groupItems = groups[gv];
+    // Check if all items in this group are leaves (no more segments)
+    var allLeaves = groupItems.every(function (it) { return depth + 1 >= it.segments.length; });
+    if (allLeaves && groupItems.length === 1) {
+      // Single leaf — show label and value on one line
+      return (
+        <div key={gv} className="compare-sidebar-breakout-row" style={{ color: groupItems[0].color }}>
+          <span className="compare-sidebar-breakout-label">{gv}</span>
+          <span className="compare-sidebar-breakout-value">{groupItems[0].value}</span>
+        </div>
+      );
+    }
+    return (
+      <div key={gv} className="compare-sidebar-group">
+        <div className="compare-sidebar-group-header">
+          <span className="compare-sidebar-group-val">{gv}</span>
+        </div>
+        <div className="compare-sidebar-group-children">
+          {renderGroupedBreakouts(groupItems, depth + 1)}
+        </div>
+      </div>
+    );
+  });
+}
+
 function buildDimOptions(iterations) {
   var opts = [{ value: 'none', label: 'None' }];
   // Only include dimensions that have more than one distinct value
@@ -1224,27 +1308,29 @@ export default function CompareView({ selected, groupByList, setGroupByList, hid
                     <div className="compare-sidebar" style={{ maxHeight: 180 }}>
                     {pinnedEntry && pinnedEntry.entry && !pinnedEntry.entry.isGap ? (function () {
                       var e = pinnedEntry.entry;
-                      var items = [];
                       if (sm.breakouts.length > 0) {
                         var prefix = dataKey + '_';
+                        var flatItems = [];
                         Object.keys(e).filter(function (k) {
                           return k.startsWith(prefix) && !k.endsWith('_stddevPct') && !k.endsWith('_error') && !k.endsWith('_samples');
                         }).sort(naturalCompare).forEach(function (k, ki) {
                           var labelName = k.substring(prefix.length);
-                          items.push({ label: labelName, value: e[k] != null ? formatValue(e[k]) : '-', color: SUPP_COLORS[(si + ki) % SUPP_COLORS.length] });
+                          flatItems.push({ label: labelName, value: e[k] != null ? formatValue(e[k]) : '-', color: SUPP_COLORS[(si + ki) % SUPP_COLORS.length] });
                         });
+                          // Parse labels into segments for hierarchical grouping
+                        var groupItems = flatItems.map(function (item) {
+                          return { segments: parseBreakoutSegments(item.label), value: item.value, color: item.color };
+                        });
+                        return renderGroupedBreakouts(groupItems, 0);
                       } else {
                         var v = e[dataKey];
-                        items.push({ label: sm.source + '::' + sm.type, value: v != null ? formatValue(v) : '-', color: color });
-                      }
-                      return items.map(function (item, ii) {
                         return (
-                          <div key={ii} className="compare-sidebar-item" style={{ color: item.color }}>
-                            <div className="compare-sidebar-label">{item.label}</div>
-                            <div className="compare-sidebar-value">{item.value}</div>
+                          <div className="compare-sidebar-item" style={{ color: color }}>
+                            <div className="compare-sidebar-label">{sm.source}::{sm.type}</div>
+                            <div className="compare-sidebar-value">{v != null ? formatValue(v) : '-'}</div>
                           </div>
                         );
-                      });
+                      }
                     })() : <div className="compare-sidebar-empty">Click a bar</div>}
                     </div>
                   </div>
@@ -1559,27 +1645,29 @@ export default function CompareView({ selected, groupByList, setGroupByList, hid
                     <div className="compare-sidebar" style={{ maxHeight: 180 }}>
                     {pinnedEntry && pinnedEntry.entry && !pinnedEntry.entry.isGap ? (function () {
                       var e = pinnedEntry.entry;
-                      var items = [];
                       if (sm.breakouts.length > 0) {
                         var prefix = dataKey + '_';
+                        var flatItems = [];
                         Object.keys(e).filter(function (k) {
                           return k.startsWith(prefix) && !k.endsWith('_stddevPct') && !k.endsWith('_error') && !k.endsWith('_samples');
                         }).sort(naturalCompare).forEach(function (k, ki) {
                           var labelName = k.substring(prefix.length);
-                          items.push({ label: labelName, value: e[k] != null ? formatValue(e[k]) : '-', color: SUPP_COLORS[(si + ki) % SUPP_COLORS.length] });
+                          flatItems.push({ label: labelName, value: e[k] != null ? formatValue(e[k]) : '-', color: SUPP_COLORS[(si + ki) % SUPP_COLORS.length] });
                         });
+                          // Parse labels into segments for hierarchical grouping
+                        var groupItems = flatItems.map(function (item) {
+                          return { segments: parseBreakoutSegments(item.label), value: item.value, color: item.color };
+                        });
+                        return renderGroupedBreakouts(groupItems, 0);
                       } else {
                         var v = e[dataKey];
-                        items.push({ label: sm.source + '::' + sm.type, value: v != null ? formatValue(v) : '-', color: color });
-                      }
-                      return items.map(function (item, ii) {
                         return (
-                          <div key={ii} className="compare-sidebar-item" style={{ color: item.color }}>
-                            <div className="compare-sidebar-label">{item.label}</div>
-                            <div className="compare-sidebar-value">{item.value}</div>
+                          <div className="compare-sidebar-item" style={{ color: color }}>
+                            <div className="compare-sidebar-label">{sm.source}::{sm.type}</div>
+                            <div className="compare-sidebar-value">{v != null ? formatValue(v) : '-'}</div>
                           </div>
                         );
-                      });
+                      }
                     })() : <div className="compare-sidebar-empty">Click a bar</div>}
                     </div>
                   </div>
