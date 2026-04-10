@@ -796,7 +796,27 @@ a.run-id:hover {
   white-space: nowrap;
 }
 
-.compare-groupby-chip button {
+.compare-chip-label {
+  padding: 0 2px;
+}
+
+.compare-chip-arrow {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--accent);
+  line-height: 1;
+  padding: 0 1px;
+  opacity: 0.5;
+}
+
+.compare-chip-arrow:hover {
+  opacity: 1;
+}
+
+.compare-groupby-chip button:not(.compare-chip-arrow) {
   background: none;
   border: none;
   cursor: pointer;
@@ -806,7 +826,7 @@ a.run-id:hover {
   padding: 0 0 0 2px;
 }
 
-.compare-groupby-chip button:hover {
+.compare-groupby-chip button:not(.compare-chip-arrow):hover {
   color: var(--danger);
 }
 

@@ -300,7 +300,7 @@ function buildDimOptions(iterations) {
   return opts;
 }
 
-export default function CompareView({ selected, groupByList, setGroupByList, seriesBy, setSeriesBy, hiddenFields, setHiddenFields }) {
+export default function CompareView({ selected, groupByList, setGroupByList, hiddenFields, setHiddenFields }) {
   var [metricValues, setMetricValues] = useState({});
   var [loading, setLoading] = useState(false);
   var [supplementalMetrics, setSupplementalMetrics] = useState([]); // [{ source, type, values: {iterId: {mean,...}} }]
@@ -378,6 +378,13 @@ export default function CompareView({ selected, groupByList, setGroupByList, ser
       setGroupByList([dimCounts[0].value]);
     }
   }, [iterations, dimOptions]);
+
+  // Auto-group on first render when no group-by is set
+  useEffect(function () {
+    if (groupByList.length === 0 && iterations.length > 0 && dimOptions.length > 1) {
+      handleAutoGroup();
+    }
+  }, [iterations.length > 0 && dimOptions.length > 1]);
 
   var handleShowAddMetric = useCallback(function () {
     setShowAddMetric(true);
@@ -668,21 +675,9 @@ export default function CompareView({ selected, groupByList, setGroupByList, ser
         var gb = getCompoundGroupValue(b, groupByList);
         var cmp = naturalCompare(ga, gb);
         if (cmp !== 0) return cmp;
-        return naturalCompare(getDimValue(a, seriesBy), getDimValue(b, seriesBy));
+        return 0;
       });
 
-      // Build series color map
-      var seriesColorMap = {};
-      if (seriesBy !== 'none') {
-        var uniqueSeries = [];
-        sorted.forEach(function (it) {
-          var sv = getDimValue(it, seriesBy);
-          if (!seriesColorMap.hasOwnProperty(sv)) {
-            seriesColorMap[sv] = COLORS[uniqueSeries.length % COLORS.length];
-            uniqueSeries.push(sv);
-          }
-        });
-      }
 
       // Precompute per-group common keys (items that vary globally but are common within a group)
       var perGroupCommonKeys = {};
@@ -737,11 +732,7 @@ export default function CompareView({ selected, groupByList, setGroupByList, ser
         var mv = metricValues[it.iterationId];
         var mean = mv ? mv.mean : null;
         var stddev = computeStddev(mv);
-        var sv = getDimValue(it, seriesBy);
-
         // Build label excluding: group-by and per-group common keys.
-        // Series-by is NOT excluded — each bar has a different series value
-        // and it needs to be visible in the label for identification.
         var excludeKeys = new Set();
         groupByList.forEach(function (dim) { excludeKeys.add(dim); });
         hiddenSet.forEach(function (dim) { excludeKeys.add(dim); });
@@ -757,8 +748,7 @@ export default function CompareView({ selected, groupByList, setGroupByList, ser
           stddevPct: mv ? mv.stddevPct : null,
           samples: mv ? mv.sampleValues.length : 0,
           groupValue: gv,
-          seriesValue: sv,
-          color: seriesBy !== 'none' ? seriesColorMap[sv] : COLORS[i % COLORS.length],
+          color: COLORS[i % COLORS.length],
           isGap: false,
         };
         // Add supplemental metric values with stddev for error bars
@@ -792,13 +782,6 @@ export default function CompareView({ selected, groupByList, setGroupByList, ser
         chartData.push(entry);
       }
 
-      // Build legend entries for series
-      var legendData = [];
-      if (seriesBy !== 'none') {
-        Object.keys(seriesColorMap).forEach(function (sv) {
-          legendData.push({ value: formatDimValue(seriesBy, sv), color: seriesColorMap[sv] });
-        });
-      }
 
       // Compute group sizes and per-group common items for labels above the chart
       var groupInfo = [];
@@ -813,7 +796,6 @@ export default function CompareView({ selected, groupByList, setGroupByList, ser
         // Keys to exclude from per-group common: group-by dims, series-by
         var excludeFromGroupCommon = new Set();
         groupByList.forEach(function (dim) { excludeFromGroupCommon.add(dim); });
-        if (seriesBy !== 'none') excludeFromGroupCommon.add(seriesBy);
 
         var currentGroup = null;
         var currentCount = 0;
@@ -835,11 +817,11 @@ export default function CompareView({ selected, groupByList, setGroupByList, ser
         }
       }
 
-      result.push({ metricName: metricName, data: chartData, legendData: legendData, commonItems: commonItems, groupInfo: groupInfo });
+      result.push({ metricName: metricName, data: chartData, commonItems: commonItems, groupInfo: groupInfo });
     });
 
     return result;
-  }, [iterations, metricValues, groupByList, seriesBy, supplementalMetrics, hiddenSet]);
+  }, [iterations, metricValues, groupByList, supplementalMetrics, hiddenSet]);
 
   if (loading) {
     return (
@@ -865,7 +847,23 @@ export default function CompareView({ selected, groupByList, setGroupByList, ser
           {groupByList.map(function (dim, gi) {
             return (
               <span key={gi} className="compare-groupby-chip">
-                {dimOptions.find(function (o) { return o.value === dim; })?.label || dim}
+                {gi > 0 && (
+                  <button className="compare-chip-arrow" onClick={function () {
+                    var next = groupByList.slice();
+                    next[gi] = next[gi - 1];
+                    next[gi - 1] = dim;
+                    setGroupByList(next);
+                  }} title="Move left">&lsaquo;</button>
+                )}
+                <span className="compare-chip-label">{dimOptions.find(function (o) { return o.value === dim; })?.label || dim}</span>
+                {gi < groupByList.length - 1 && (
+                  <button className="compare-chip-arrow" onClick={function () {
+                    var next = groupByList.slice();
+                    next[gi] = next[gi + 1];
+                    next[gi + 1] = dim;
+                    setGroupByList(next);
+                  }} title="Move right">&rsaquo;</button>
+                )}
                 <button onClick={function () { setGroupByList(groupByList.filter(function (_, i) { return i !== gi; })); }}>&times;</button>
               </span>
             );
@@ -893,12 +891,6 @@ export default function CompareView({ selected, groupByList, setGroupByList, ser
           )}
         </div>
         <div className="compare-control">
-          <label>Series by</label>
-          <select value={seriesBy} onChange={function (e) { setSeriesBy(e.target.value); }}>
-            {dimOptions.map(function (o) { return <option key={o.value} value={o.value}>{o.label}</option>; })}
-          </select>
-        </div>
-        <div className="compare-control">
           <label>Hide</label>
           {hiddenFields.map(function (dim, hi) {
             var opt = allDimOptions.find(function (o) { return o.value === dim; });
@@ -918,7 +910,6 @@ export default function CompareView({ selected, groupByList, setGroupByList, ser
                 if (groupByList.includes(e.target.value)) {
                   setGroupByList(groupByList.filter(function (d) { return d !== e.target.value; }));
                 }
-                if (seriesBy === e.target.value) setSeriesBy('none');
               }
             }}
           >
@@ -1123,18 +1114,6 @@ export default function CompareView({ selected, groupByList, setGroupByList, ser
               </div>
             )}
 
-            {chart.legendData.length > 0 && (
-              <div className="compare-legend">
-                {chart.legendData.map(function (ld) {
-                  return (
-                    <span key={ld.value} className="compare-legend-item">
-                      <span className="compare-legend-swatch" style={{ background: ld.color }} />
-                      {ld.value}
-                    </span>
-                  );
-                })}
-              </div>
-            )}
 
             {false && supplementalMetrics.map(function (sm, si) {
               if (sm.display !== 'panel') return null;

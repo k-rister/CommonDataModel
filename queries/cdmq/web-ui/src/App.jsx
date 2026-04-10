@@ -7,7 +7,7 @@ import DebugConsole from './components/DebugConsole';
 import './index.css';
 
 // Encode workflow state into a URL hash string
-function encodeState(filters, selectedRunIds, view, groupByList, seriesBy) {
+function encodeState(filters, selectedRunIds, view, groupByList) {
   var state = {};
   if (filters) {
     if (filters.benchmark) state.benchmark = filters.benchmark;
@@ -23,7 +23,6 @@ function encodeState(filters, selectedRunIds, view, groupByList, seriesBy) {
   if (selectedRunIds && selectedRunIds.length > 0) state.selectedRuns = selectedRunIds;
   if (view && view !== 'search') state.view = view;
   if (groupByList && groupByList.length > 0) state.groupBy = groupByList;
-  if (seriesBy && seriesBy !== 'none') state.seriesBy = seriesBy;
   return '#' + encodeURIComponent(JSON.stringify(state));
 }
 
@@ -51,7 +50,6 @@ export default function App() {
   const [error, setError] = useState(null);
   const [view, setView] = useState('search');
   const [groupByList, setGroupByList] = useState([]);  // array of dimension strings
-  const [seriesBy, setSeriesBy] = useState('none');
   const [hiddenFields, setHiddenFields] = useState([]);  // array of dimension strings to hide
   const [shareMsg, setShareMsg] = useState('');
   const lastFilters = useRef(null);
@@ -64,7 +62,6 @@ export default function App() {
     if (state) {
       restoredState.current = state;
       if (state.groupBy) setGroupByList(Array.isArray(state.groupBy) ? state.groupBy : [state.groupBy]);
-      if (state.seriesBy) setSeriesBy(state.seriesBy);
     }
   }, []);
 
@@ -151,7 +148,7 @@ export default function App() {
     var runIdSet = new Set();
     selected.forEach(function (it) { runIdSet.add(it.runId); });
     var selectedRunIds = Array.from(runIdSet);
-    var hash = encodeState(filters, selectedRunIds, view, groupByList, seriesBy);
+    var hash = encodeState(filters, selectedRunIds, view, groupByList);
     var url = window.location.origin + window.location.pathname + hash;
     // Update the URL bar so the user can see and copy it directly
     window.history.replaceState(null, '', hash);
@@ -233,7 +230,7 @@ export default function App() {
       )}
 
       {view === 'compare' && (
-        <CompareView selected={selected} groupByList={groupByList} setGroupByList={setGroupByList} seriesBy={seriesBy} setSeriesBy={setSeriesBy} hiddenFields={hiddenFields} setHiddenFields={setHiddenFields} />
+        <CompareView selected={selected} groupByList={groupByList} setGroupByList={setGroupByList} hiddenFields={hiddenFields} setHiddenFields={setHiddenFields} />
       )}
 
       {view === 'deepdive' && (
