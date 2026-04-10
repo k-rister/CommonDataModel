@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
-import { ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip, ErrorBar, ResponsiveContainer, Legend, Cell } from 'recharts';
+import { ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip, ErrorBar, ResponsiveContainer, Legend, Cell, ReferenceLine, LabelList } from 'recharts';
 import * as api from '../api/cdm';
 import { timeWork } from '../debugLog';
 
@@ -23,6 +23,18 @@ function formatYTick(value) {
   if (abs >= 1) return value.toFixed(2);
   if (abs >= 0.1) return value.toFixed(3);
   return value.toPrecision(3);
+}
+
+// Compact value for bar labels — max 4 significant digits
+function formatBarLabel(v) {
+  if (v == null) return '';
+  var abs = Math.abs(v);
+  if (abs === 0) return '0';
+  if (abs >= 1000000) return (v / 1000000).toPrecision(3) + 'M';
+  if (abs >= 1000) return (v / 1000).toPrecision(3) + 'k';
+  if (abs >= 100) return v.toPrecision(4);
+  if (abs >= 1) return v.toPrecision(3);
+  return v.toPrecision(2);
 }
 
 function formatValue(v) {
@@ -1375,8 +1387,37 @@ export default function CompareView({ selected, groupByList, setGroupByList, hid
                                   radius={ct === 'stacked' ? [0, 0, 0, 0] : [3, 3, 0, 0]}
                                   stackId={ct === 'stacked' ? 'stack' : undefined}
                                   name={labelName}>
+                                  <LabelList dataKey={lk} content={function (props) {
+                                    if (ct === 'stacked') {
+                                      // For stacked: check both width and individual segment height
+                                      var val3 = props.value;
+                                      var w3 = props.width;
+                                      var h3 = props.height;
+                                      if (val3 == null || w3 == null || h3 == null) return null;
+                                      var text3 = formatBarLabel(val3);
+                                      if (text3.length * 8 > w3 - 4 || Math.abs(h3) < 14) return null;
+                                      return (
+                                        <text x={props.x + w3 / 2} y={props.y + h3 / 2} textAnchor="middle" dominantBaseline="middle"
+                                          fontSize={12} fontWeight={700} fontFamily="ui-monospace, Consolas, monospace"
+                                          fill="rgba(255,255,255,0.9)">{text3}</text>
+                                      );
+                                    }
+                                    var val2 = props.value;
+                                    var w2 = props.width;
+                                    var h2 = props.height;
+                                    if (val2 == null || w2 == null || h2 == null) return null;
+                                    var text2 = formatBarLabel(val2);
+                                    if (text2.length * 8 > w2 - 4 || h2 < 16) return null;
+                                    return (
+                                      <text x={props.x + w2 / 2} y={props.y + h2 / 2} textAnchor="middle" dominantBaseline="middle"
+                                        fontSize={12} fontWeight={700} fontFamily="ui-monospace, Consolas, monospace"
+                                        fill="rgba(255,255,255,0.9)">{text2}</text>
+                                    );
+                                  }} />
                                   {chart.data.map(function (entry, idx) {
-                                    return <Cell key={idx} fill={entry.isGap ? 'transparent' : itemColor} fillOpacity={0.7} />;
+                                    var isPinnedBk = pinnedEntry && pinnedEntry.entry && pinnedEntry.entry.iterationId === entry.iterationId;
+                                    var bkOpacity = pinnedEntry ? (isPinnedBk ? 0.9 : 0.2) : 0.7;
+                                    return <Cell key={idx} fill={entry.isGap ? 'transparent' : itemColor} fillOpacity={bkOpacity} />;
                                   })}
                                 </Bar>
                               );
@@ -1387,8 +1428,23 @@ export default function CompareView({ selected, groupByList, setGroupByList, hid
                         return (
                           <Bar dataKey={dataKey} yAxisId="left" radius={[3, 3, 0, 0]}>
                             <ErrorBar dataKey={dataKey + '_error'} width={4} strokeWidth={2} stroke="var(--text-secondary)" />
+                            <LabelList dataKey={dataKey} content={function (props) {
+                              var val4 = props.value;
+                              var w4 = props.width;
+                              var h4 = props.height;
+                              if (val4 == null || w4 == null || h4 == null) return null;
+                              var text4 = formatBarLabel(val4);
+                              if (text4.length * 8 > w4 - 4 || h4 < 16) return null;
+                              return (
+                                <text x={props.x + w4 / 2} y={props.y + h4 / 2} textAnchor="middle" dominantBaseline="middle"
+                                  fontSize={12} fontWeight={700} fontFamily="ui-monospace, Consolas, monospace"
+                                  fill="rgba(255,255,255,0.9)">{text4}</text>
+                              );
+                            }} />
                             {chart.data.map(function (entry, idx) {
-                              return <Cell key={idx} fill={entry.isGap ? 'transparent' : color} fillOpacity={0.7} />;
+                              var isPinnedCell = pinnedEntry && pinnedEntry.entry && pinnedEntry.entry.iterationId === entry.iterationId;
+                              var cellOpacity = pinnedEntry ? (isPinnedCell ? 0.9 : 0.2) : 0.7;
+                              return <Cell key={idx} fill={entry.isGap ? 'transparent' : color} fillOpacity={cellOpacity} />;
                             })}
                           </Bar>
                         );
@@ -1532,6 +1588,9 @@ export default function CompareView({ selected, groupByList, setGroupByList, hid
                     );
                   }}
                 />
+                {pinnedEntry && pinnedEntry.entry && pinnedEntry.entry.name && (
+                  <ReferenceLine x={pinnedEntry.entry.name} yAxisId="left" stroke="#ff6b6b" strokeDasharray="6 4" strokeWidth={2} />
+                )}
                 <Bar dataKey="value" yAxisId="left" radius={[4, 4, 0, 0]} style={{ cursor: 'pointer' }}
                   onClick={function (data) {
                     if (data && !data.isGap && data.value != null) {
@@ -1543,8 +1602,29 @@ export default function CompareView({ selected, groupByList, setGroupByList, hid
                   }}
                 >
                   <ErrorBar dataKey="errorY" width={4} strokeWidth={2} stroke="var(--text-secondary)" />
+                  <LabelList dataKey="value" content={function (props) {
+                    var val = props.value;
+                    var w = props.width;
+                    var h = props.height;
+                    if (val == null || w == null || h == null) return null;
+                    var text = formatBarLabel(val);
+                    var charWidth = 8; // approximate pixels per character at font-size 12
+                    var textWidth = text.length * charWidth;
+                    // Show inside bar if it fits width-wise and bar is tall enough
+                    if (textWidth > w - 4) return null;
+                    if (h < 16) return null;
+                    return (
+                      <text x={props.x + w / 2} y={props.y + h / 2} textAnchor="middle" dominantBaseline="middle"
+                        fontSize={12} fontWeight={700} fontFamily="ui-monospace, Consolas, monospace"
+                        fill="rgba(255,255,255,0.9)">
+                        {text}
+                      </text>
+                    );
+                  }} />
                   {chart.data.map(function (entry, idx) {
-                    return <Cell key={idx} fill={entry.isGap ? 'transparent' : entry.color} />;
+                    var isPinned = pinnedEntry && pinnedEntry.entry && pinnedEntry.entry.iterationId === entry.iterationId;
+                    var opacity = pinnedEntry ? (isPinned ? 1 : 0.3) : 1;
+                    return <Cell key={idx} fill={entry.isGap ? 'transparent' : entry.color} fillOpacity={opacity} />;
                   })}
                 </Bar>
                 {supplementalMetrics.map(function (sm, si) {
@@ -1682,6 +1762,9 @@ export default function CompareView({ selected, groupByList, setGroupByList, hid
                       ) : (
                         <YAxis yAxisId="right" orientation="right" width={1} tick={false} axisLine={false} />
                       )}
+                      {pinnedEntry && pinnedEntry.entry && pinnedEntry.entry.name && (
+                        <ReferenceLine x={pinnedEntry.entry.name} yAxisId="left" stroke="#ff6b6b" strokeDasharray="6 4" strokeWidth={2} />
+                      )}
                       {(function () {
                         if (sm.breakouts.length > 0) {
                           var labelSet = new Set();
@@ -1713,8 +1796,37 @@ export default function CompareView({ selected, groupByList, setGroupByList, hid
                                   radius={ct === 'stacked' ? [0, 0, 0, 0] : [3, 3, 0, 0]}
                                   stackId={ct === 'stacked' ? 'stack' : undefined}
                                   name={labelName}>
+                                  <LabelList dataKey={lk} content={function (props) {
+                                    if (ct === 'stacked') {
+                                      // For stacked: check both width and individual segment height
+                                      var val3 = props.value;
+                                      var w3 = props.width;
+                                      var h3 = props.height;
+                                      if (val3 == null || w3 == null || h3 == null) return null;
+                                      var text3 = formatBarLabel(val3);
+                                      if (text3.length * 8 > w3 - 4 || Math.abs(h3) < 14) return null;
+                                      return (
+                                        <text x={props.x + w3 / 2} y={props.y + h3 / 2} textAnchor="middle" dominantBaseline="middle"
+                                          fontSize={12} fontWeight={700} fontFamily="ui-monospace, Consolas, monospace"
+                                          fill="rgba(255,255,255,0.9)">{text3}</text>
+                                      );
+                                    }
+                                    var val2 = props.value;
+                                    var w2 = props.width;
+                                    var h2 = props.height;
+                                    if (val2 == null || w2 == null || h2 == null) return null;
+                                    var text2 = formatBarLabel(val2);
+                                    if (text2.length * 8 > w2 - 4 || h2 < 16) return null;
+                                    return (
+                                      <text x={props.x + w2 / 2} y={props.y + h2 / 2} textAnchor="middle" dominantBaseline="middle"
+                                        fontSize={12} fontWeight={700} fontFamily="ui-monospace, Consolas, monospace"
+                                        fill="rgba(255,255,255,0.9)">{text2}</text>
+                                    );
+                                  }} />
                                   {chart.data.map(function (entry, idx) {
-                                    return <Cell key={idx} fill={entry.isGap ? 'transparent' : itemColor} fillOpacity={0.7} />;
+                                    var isPinnedBk = pinnedEntry && pinnedEntry.entry && pinnedEntry.entry.iterationId === entry.iterationId;
+                                    var bkOpacity = pinnedEntry ? (isPinnedBk ? 0.9 : 0.2) : 0.7;
+                                    return <Cell key={idx} fill={entry.isGap ? 'transparent' : itemColor} fillOpacity={bkOpacity} />;
                                   })}
                                 </Bar>
                               );
@@ -1724,8 +1836,23 @@ export default function CompareView({ selected, groupByList, setGroupByList, hid
                         return (
                           <Bar dataKey={dataKey} yAxisId="left" radius={[3, 3, 0, 0]}>
                             <ErrorBar dataKey={dataKey + '_error'} width={4} strokeWidth={2} stroke="var(--text-secondary)" />
+                            <LabelList dataKey={dataKey} content={function (props) {
+                              var val4 = props.value;
+                              var w4 = props.width;
+                              var h4 = props.height;
+                              if (val4 == null || w4 == null || h4 == null) return null;
+                              var text4 = formatBarLabel(val4);
+                              if (text4.length * 8 > w4 - 4 || h4 < 16) return null;
+                              return (
+                                <text x={props.x + w4 / 2} y={props.y + h4 / 2} textAnchor="middle" dominantBaseline="middle"
+                                  fontSize={12} fontWeight={700} fontFamily="ui-monospace, Consolas, monospace"
+                                  fill="rgba(255,255,255,0.9)">{text4}</text>
+                              );
+                            }} />
                             {chart.data.map(function (entry, idx) {
-                              return <Cell key={idx} fill={entry.isGap ? 'transparent' : color} fillOpacity={0.7} />;
+                              var isPinnedCell = pinnedEntry && pinnedEntry.entry && pinnedEntry.entry.iterationId === entry.iterationId;
+                              var cellOpacity = pinnedEntry ? (isPinnedCell ? 0.9 : 0.2) : 0.7;
+                              return <Cell key={idx} fill={entry.isGap ? 'transparent' : color} fillOpacity={cellOpacity} />;
                             })}
                           </Bar>
                         );
