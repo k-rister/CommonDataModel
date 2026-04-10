@@ -1321,6 +1321,56 @@ a.run-id:hover {
   padding: 1px 0;
 }
 
+/* Breakout table in sidebar */
+.compare-sidebar-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+}
+
+.compare-sidebar-table th {
+  text-align: left;
+  font-size: 9px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  padding: 2px 4px;
+  border-bottom: 1px solid var(--border);
+}
+
+.compare-sidebar-table th:last-child {
+  text-align: right;
+}
+
+.compare-sidebar-table-affix {
+  display: inline;
+  font-size: 8px;
+  font-weight: 400;
+  color: var(--accent);
+  letter-spacing: 0;
+  text-transform: none;
+  font-style: italic;
+}
+
+.compare-sidebar-table-seg {
+  padding: 2px 4px;
+  border-right: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  vertical-align: middle;
+  font-weight: 600;
+  color: var(--text);
+  font-family: 'SF Mono', ui-monospace, Consolas, monospace;
+}
+
+.compare-sidebar-table-val {
+  padding: 2px 4px;
+  text-align: right;
+  font-weight: 700;
+  font-family: 'SF Mono', ui-monospace, Consolas, monospace;
+  border-bottom: 1px solid var(--border);
+}
+
 /* Iteration selector */
 .compare-iter-selector {
   display: flex;

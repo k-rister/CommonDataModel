@@ -277,80 +277,172 @@ function parseBreakoutSegments(label) {
   return matches || [label];
 }
 
-// Recursively group items by their label segments and render as nested divs
+// Render breakout items as a table with rowSpan for repeated segment values
 // items: [{ segments: ["<host1>", "<0>"], value: "45.2", color: "#..." }, ...]
-// depth: which segment index to group by
-function renderGroupedBreakouts(items, depth) {
+// breakoutNames: ["hostname", "package"]
+function renderGroupedBreakouts(items, depth, breakoutNames) {
   if (items.length === 0) return null;
 
-  // If all items have no more segments at this depth, render as leaves
-  if (items.every(function (it) { return depth >= it.segments.length; })) {
-    return items.map(function (it, ii) {
-      return (
-        <div key={ii} className="compare-sidebar-breakout-row" style={{ color: it.color }}>
-          <span className="compare-sidebar-breakout-value">{it.value}</span>
-        </div>
-      );
+  // Build rows: each row has parsed segment values and the metric value
+  var rows = items.map(function (it) {
+    var segVals = it.segments.map(function (s) { return s.replace(/^</, '').replace(/>$/, ''); });
+    return { segVals: segVals, value: it.value, color: it.color };
+  });
+
+  // Sort rows by segments (natural sort, left to right)
+  rows.sort(function (a, b) {
+    for (var i = 0; i < Math.max(a.segVals.length, b.segVals.length); i++) {
+      var cmp = naturalCompare(a.segVals[i] || '', b.segVals[i] || '');
+      if (cmp !== 0) return cmp;
+    }
+    return 0;
+  });
+
+  var numCols = rows.length > 0 ? rows[0].segVals.length : 0;
+
+  // Compute rowSpans for each cell
+  // rowSpans[row][col] = number of rows this cell spans, or 0 if hidden (spanned by cell above)
+  var rowSpans = rows.map(function () { return new Array(numCols).fill(1); });
+  for (var col = 0; col < numCols; col++) {
+    for (var row = rows.length - 1; row > 0; row--) {
+      // Check if this cell and all cells to its left match the row above
+      var matches = true;
+      for (var c = 0; c <= col; c++) {
+        if (rows[row].segVals[c] !== rows[row - 1].segVals[c]) { matches = false; break; }
+      }
+      if (matches) {
+        rowSpans[row][col] = 0; // hidden
+        rowSpans[row - 1][col] += rowSpans[row][col] || 1; // not right, need to find the span start
+      }
+    }
+  }
+  // Recompute spans properly: scan top-down
+  for (var col2 = 0; col2 < numCols; col2++) {
+    rowSpans.forEach(function (r) { r[col2] = 1; }); // reset
+    var spanStart = 0;
+    for (var row2 = 1; row2 <= rows.length; row2++) {
+      var same = row2 < rows.length;
+      if (same) {
+        for (var c2 = 0; c2 <= col2; c2++) {
+          if (rows[row2].segVals[c2] !== rows[spanStart].segVals[c2]) { same = false; break; }
+        }
+      }
+      if (!same) {
+        rowSpans[spanStart][col2] = row2 - spanStart;
+        for (var r2 = spanStart + 1; r2 < row2; r2++) rowSpans[r2][col2] = 0;
+        spanStart = row2;
+      }
+    }
+  }
+
+  // Build column headers and deduplicate common suffixes from text values
+  var headers = [];
+  var commonSuffixes = [];
+  for (var h = 0; h < numCols; h++) {
+    var name = (breakoutNames && h < breakoutNames.length) ? breakoutNames[h] : '';
+    if (name.indexOf('=') >= 0) name = name.substring(0, name.indexOf('='));
+
+    // Collect unique values for this column
+    var uniqueVals = [];
+    var seen = {};
+    rows.forEach(function (r) {
+      var v = r.segVals[h] || '';
+      if (!seen[v]) { seen[v] = true; uniqueVals.push(v); }
     });
+
+    var suffix = '';
+    var prefix = '';
+    var delimiters = '.,-_/';
+    // Only dedupe if: >1 unique value, all look like text (not purely numeric)
+    if (uniqueVals.length > 1 && !uniqueVals.every(function (v) { return /^\d+$/.test(v); })) {
+      // Try common suffix first (at a delimiter boundary)
+      var first = uniqueVals[0];
+      for (var si = first.length - 1; si > 0; si--) {
+        if (delimiters.indexOf(first[si]) >= 0 || delimiters.indexOf(first[si - 1]) >= 0) {
+          var candSuffix = first.substring(si);
+          if (candSuffix.length >= 2 && uniqueVals.every(function (v) { return v.endsWith(candSuffix); })) {
+            suffix = candSuffix;
+          }
+        }
+      }
+      // If no suffix found, try common prefix (at a delimiter boundary)
+      if (!suffix) {
+        for (var pi = 1; pi < first.length; pi++) {
+          if (delimiters.indexOf(first[pi]) >= 0 || delimiters.indexOf(first[pi - 1]) >= 0) {
+            var candPrefix = first.substring(0, pi + 1);
+            if (candPrefix.length >= 2 && uniqueVals.every(function (v) { return v.startsWith(candPrefix); })) {
+              prefix = candPrefix;
+            }
+          }
+        }
+      }
+    }
+
+    // Strip suffix or prefix from row values
+    if (suffix) {
+      rows.forEach(function (r) {
+        if (r.segVals[h]) r.segVals[h] = r.segVals[h].substring(0, r.segVals[h].length - suffix.length);
+      });
+    } else if (prefix) {
+      rows.forEach(function (r) {
+        if (r.segVals[h]) r.segVals[h] = r.segVals[h].substring(prefix.length);
+      });
+    }
+
+    commonSuffixes.push({ suffix: suffix, prefix: prefix });
+    headers.push(name);
   }
 
-  // Get the segment value at this depth for each item
-  // Group items by their segment at this depth
-  var groups = {};
-  var groupOrder = [];
-  items.forEach(function (it) {
-    var seg = depth < it.segments.length ? it.segments[depth] : '__none__';
-    // Strip angle brackets for display
-    var display = seg.replace(/^</, '').replace(/>$/, '');
-    if (!groups[display]) {
-      groups[display] = [];
-      groupOrder.push(display);
+  // Recompute rowSpans after suffix stripping may have changed values
+  for (var col3 = 0; col3 < numCols; col3++) {
+    var spanStart2 = 0;
+    for (var row3 = 0; row3 <= rows.length; row3++) {
+      var same2 = row3 < rows.length;
+      if (same2) {
+        for (var c3 = 0; c3 <= col3; c3++) {
+          if (rows[row3].segVals[c3] !== rows[spanStart2].segVals[c3]) { same2 = false; break; }
+        }
+      }
+      if (!same2) {
+        rowSpans[spanStart2][col3] = row3 - spanStart2;
+        for (var r3 = spanStart2 + 1; r3 < row3; r3++) rowSpans[r3][col3] = 0;
+        spanStart2 = row3;
+      }
     }
-    groups[display].push(it);
-  });
-
-  groupOrder.sort(naturalCompare);
-
-  // If there's only one group value at this depth, it's common — show as header and recurse
-  if (groupOrder.length === 1) {
-    var commonVal = groupOrder[0];
-    return (
-      <div className="compare-sidebar-group">
-        <div className="compare-sidebar-group-header">
-          <span className="compare-sidebar-group-val">{commonVal}</span>
-        </div>
-        <div className="compare-sidebar-group-children">
-          {renderGroupedBreakouts(groups[commonVal], depth + 1)}
-        </div>
-      </div>
-    );
   }
 
-  // Multiple groups — render each as a distinct section
-  return groupOrder.map(function (gv) {
-    var groupItems = groups[gv];
-    // Check if all items in this group are leaves (no more segments)
-    var allLeaves = groupItems.every(function (it) { return depth + 1 >= it.segments.length; });
-    if (allLeaves && groupItems.length === 1) {
-      // Single leaf — show label and value on one line
-      return (
-        <div key={gv} className="compare-sidebar-breakout-row" style={{ color: groupItems[0].color }}>
-          <span className="compare-sidebar-breakout-label">{gv}</span>
-          <span className="compare-sidebar-breakout-value">{groupItems[0].value}</span>
-        </div>
-      );
-    }
-    return (
-      <div key={gv} className="compare-sidebar-group">
-        <div className="compare-sidebar-group-header">
-          <span className="compare-sidebar-group-val">{gv}</span>
-        </div>
-        <div className="compare-sidebar-group-children">
-          {renderGroupedBreakouts(groupItems, depth + 1)}
-        </div>
-      </div>
-    );
-  });
+  return (
+    <table className="compare-sidebar-table">
+      <thead>
+        <tr>
+          {headers.map(function (hdr, hi) {
+            var cs = commonSuffixes[hi];
+            return (
+              <th key={hi}>
+                {cs.prefix && <span className="compare-sidebar-table-affix">{cs.prefix}</span>}
+                {hdr}
+                {cs.suffix && <span className="compare-sidebar-table-affix">{cs.suffix}</span>}
+              </th>
+            );
+          })}
+          <th>value</th>
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map(function (row, ri) {
+          return (
+            <tr key={ri}>
+              {row.segVals.map(function (sv, ci) {
+                if (rowSpans[ri][ci] === 0) return null;
+                return <td key={ci} rowSpan={rowSpans[ri][ci]} className="compare-sidebar-table-seg">{sv}</td>;
+              })}
+              <td className="compare-sidebar-table-val" style={{ color: row.color }}>{row.value}</td>
+            </tr>
+          );
+        })}
+      </tbody>
+    </table>
+  );
 }
 
 function buildDimOptions(iterations) {
@@ -1321,7 +1413,7 @@ export default function CompareView({ selected, groupByList, setGroupByList, hid
                         var groupItems = flatItems.map(function (item) {
                           return { segments: parseBreakoutSegments(item.label), value: item.value, color: item.color };
                         });
-                        return renderGroupedBreakouts(groupItems, 0);
+                        return renderGroupedBreakouts(groupItems, 0, sm.breakouts);
                       } else {
                         var v = e[dataKey];
                         return (
@@ -1658,7 +1750,7 @@ export default function CompareView({ selected, groupByList, setGroupByList, hid
                         var groupItems = flatItems.map(function (item) {
                           return { segments: parseBreakoutSegments(item.label), value: item.value, color: item.color };
                         });
-                        return renderGroupedBreakouts(groupItems, 0);
+                        return renderGroupedBreakouts(groupItems, 0, sm.breakouts);
                       } else {
                         var v = e[dataKey];
                         return (
