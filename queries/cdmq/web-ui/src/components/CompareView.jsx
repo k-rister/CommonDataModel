@@ -311,6 +311,7 @@ export default function CompareView({ selected, groupByList, setGroupByList, ser
   var [addMetricLoading, setAddMetricLoading] = useState(false);
   var [addMetricDisplay, setAddMetricDisplay] = useState('panel'); // 'overlay' or 'panel'
   var [showAddMetric, setShowAddMetric] = useState(false);
+  var [pinnedEntry, setPinnedEntry] = useState(null);
 
   var iterations = useMemo(function () {
     return Array.from(selected.values());
@@ -356,6 +357,27 @@ export default function CompareView({ selected, groupByList, setGroupByList, ser
   var allDimOptions = useMemo(function () {
     return buildDimOptions(iterations).filter(function (o) { return o.value !== 'none'; });
   }, [iterations]);
+
+  var handleAutoGroup = useCallback(function () {
+    // Compute distinct value counts for each varying dimension
+    var dimCounts = [];
+    dimOptions.forEach(function (o) {
+      if (o.value === 'none') return;
+      var vals = new Set();
+      iterations.forEach(function (it) {
+        vals.add(getDimValue(it, o.value));
+      });
+      dimCounts.push({ value: o.value, count: vals.size });
+    });
+    // Sort by distinct count ascending (fewest values = best grouping level)
+    dimCounts.sort(function (a, b) { return a.count - b.count; });
+    // Use all but the last one as group-by (last one stays as bar label)
+    if (dimCounts.length > 1) {
+      setGroupByList(dimCounts.slice(0, dimCounts.length - 1).map(function (d) { return d.value; }));
+    } else if (dimCounts.length === 1) {
+      setGroupByList([dimCounts[0].value]);
+    }
+  }, [iterations, dimOptions]);
 
   var handleShowAddMetric = useCallback(function () {
     setShowAddMetric(true);
@@ -861,6 +883,14 @@ export default function CompareView({ selected, groupByList, setGroupByList, ser
               return <option key={o.value} value={o.value}>{o.label}</option>;
             })}
           </select>
+          <button className="btn btn-sm btn-secondary" onClick={handleAutoGroup} title="Auto-select group-by dimensions to minimize bar labels">
+            Auto
+          </button>
+          {groupByList.length > 0 && (
+            <button className="btn btn-sm btn-secondary" onClick={function () { setGroupByList([]); }}>
+              Clear
+            </button>
+          )}
         </div>
         <div className="compare-control">
           <label>Series by</label>
@@ -1106,23 +1136,7 @@ export default function CompareView({ selected, groupByList, setGroupByList, ser
               </div>
             )}
 
-            {chart.groupInfo.length > 0 && (
-              <div className="compare-group-bar">
-                {chart.groupInfo.map(function (g, gi) {
-                  return (
-                    <div key={gi} className="compare-group-bar-item" style={{ flex: g.size }}>
-                      <div className="compare-group-bar-label">{g.label}</div>
-                      {g.groupCommon && g.groupCommon.length > 0 && (
-                        <div className="compare-group-bar-common">{g.groupCommon.join(', ')}</div>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-
-            {/* Panel-mode supplemental metrics: rendered above the primary chart */}
-            {supplementalMetrics.map(function (sm, si) {
+            {false && supplementalMetrics.map(function (sm, si) {
               if (sm.display !== 'panel') return null;
               var color = SUPP_COLORS[si % SUPP_COLORS.length];
               var dataKey = 'supp_' + si;
@@ -1147,6 +1161,7 @@ export default function CompareView({ selected, groupByList, setGroupByList, ser
                     <div className="compare-chart-area">
                   <ResponsiveContainer width="100%" height={180}>
                     <ComposedChart data={chart.data} margin={{ top: 10, right: 30, left: 60, bottom: 5 }} barCategoryGap="10%">
+
                       <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
                       <XAxis dataKey="name" hide={true} />
                       <YAxis
@@ -1162,42 +1177,8 @@ export default function CompareView({ selected, groupByList, setGroupByList, ser
                           var entry = props.payload[0].payload;
                           if (!entry || entry.isGap) return null;
                           return (
-                            <div style={{
-                              background: 'var(--surface)', border: '1px solid var(--border)',
-                              borderRadius: 'var(--radius)', padding: '8px 12px', color: 'var(--text)',
-                              fontSize: 12, boxShadow: 'var(--shadow)',
-                            }}>
-                              {entry.name && <div>{entry.name}</div>}
-                              {(function () {
-                                if (sm.breakouts.length > 0) {
-                                  // Show all breakout label values
-                                  var prefix = dataKey + '_';
-                                  return Object.keys(entry).filter(function (k) {
-                                    return k.startsWith(prefix) && !k.endsWith('_stddevPct') && !k.endsWith('_error') && !k.endsWith('_samples');
-                                  }).sort(naturalCompare).map(function (k, ki) {
-                                    var labelName = k.substring(prefix.length);
-                                    var v = entry[k];
-                                    var barColor = SUPP_COLORS[(si + ki) % SUPP_COLORS.length];
-                                    return (
-                                      <div key={k} style={{ fontWeight: 600, color: barColor, marginTop: ki === 0 ? 4 : 2 }}>
-                                        {labelName}: {v != null ? formatValue(v) : 'no data'}
-                                      </div>
-                                    );
-                                  });
-                                }
-                                var v = entry[dataKey];
-                                return (
-                                  <div style={{ fontWeight: 600, color: color, marginTop: 4 }}>
-                                    {sm.source}::{sm.type}: {v != null ? (function () {
-                                      var txt = formatValue(v);
-                                      var pct = entry[dataKey + '_stddevPct'];
-                                      var samp = entry[dataKey + '_samples'];
-                                      if (samp > 1 && pct != null) txt += ' (\u00b1' + pct.toFixed(1) + '%)';
-                                      return txt;
-                                    })() : 'no data'}
-                                  </div>
-                                );
-                              })()}
+                            <div className="compare-tooltip-mini">
+                              {entry.name}
                             </div>
                           );
                         }}
@@ -1261,6 +1242,32 @@ export default function CompareView({ selected, groupByList, setGroupByList, ser
                   </ResponsiveContainer>
                     </div>
                     {supplementalMetrics.length > 0 && <div className="compare-yaxis-label compare-yaxis-right">&nbsp;</div>}
+                    <div className="compare-sidebar" style={{ maxHeight: 180 }}>
+                    {pinnedEntry && pinnedEntry.entry && !pinnedEntry.entry.isGap ? (function () {
+                      var e = pinnedEntry.entry;
+                      var items = [];
+                      if (sm.breakouts.length > 0) {
+                        var prefix = dataKey + '_';
+                        Object.keys(e).filter(function (k) {
+                          return k.startsWith(prefix) && !k.endsWith('_stddevPct') && !k.endsWith('_error') && !k.endsWith('_samples');
+                        }).sort(naturalCompare).forEach(function (k, ki) {
+                          var labelName = k.substring(prefix.length);
+                          items.push({ label: labelName, value: e[k] != null ? formatValue(e[k]) : '-', color: SUPP_COLORS[(si + ki) % SUPP_COLORS.length] });
+                        });
+                      } else {
+                        var v = e[dataKey];
+                        items.push({ label: sm.source + '::' + sm.type, value: v != null ? formatValue(v) : '-', color: color });
+                      }
+                      return items.map(function (item, ii) {
+                        return (
+                          <div key={ii} className="compare-sidebar-item" style={{ color: item.color }}>
+                            <div className="compare-sidebar-label">{item.label}</div>
+                            <div className="compare-sidebar-value">{item.value}</div>
+                          </div>
+                        );
+                      });
+                    })() : <div className="compare-sidebar-empty">Click a bar</div>}
+                    </div>
                   </div>
                 </div>
               );
@@ -1269,13 +1276,55 @@ export default function CompareView({ selected, groupByList, setGroupByList, ser
             <div className="compare-chart-with-labels">
               <div className="compare-yaxis-label compare-yaxis-left">{chart.metricName}</div>
               <div className="compare-chart-area">
+            {/* Hierarchical group-by headers — inside chart-area for alignment */}
+            {hasGroupBy(groupByList) && (function () {
+              var nonGaps = chart.data.filter(function (d) { return !d.isGap; });
+              var iterMap = {};
+              iterations.forEach(function (it) { iterMap[it.iterationId] = it; });
+              var levels = [];
+              groupByList.forEach(function (dim) {
+                var spans = [];
+                var currentVal = null;
+                var currentCount = 0;
+                nonGaps.forEach(function (d) {
+                  var origIter = iterMap[d.iterationId];
+                  var val = origIter ? getDimValue(origIter, dim) : '';
+                  if (val !== currentVal) {
+                    if (currentVal !== null) spans.push({ value: formatDimValue(dim, currentVal), count: currentCount });
+                    currentVal = val;
+                    currentCount = 0;
+                  }
+                  currentCount++;
+                });
+                if (currentVal !== null) spans.push({ value: formatDimValue(dim, currentVal), count: currentCount });
+                levels.push({ label: formatDimLabel(dim), spans: spans });
+              });
+              return levels.map(function (level, li) {
+                return (
+                  <div key={li} className="compare-hier-row" style={{ marginLeft: 60, marginRight: 30 }}>
+                    <div className="compare-hier-label">{level.label}</div>
+                    <div className="compare-hier-spans">
+                      {level.spans.map(function (span, si2) {
+                        return (
+                          <div key={si2} className="compare-hier-span" style={{ flex: span.count }}>
+                            {span.value}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                );
+              });
+            })()}
             <ResponsiveContainer width="100%" height={chartHeight}>
-              <ComposedChart data={chart.data} margin={{ top: 20, right: 30, left: 60, bottom: 120 }} barCategoryGap="10%">
+              <ComposedChart data={chart.data} margin={{ top: 20, right: 30, left: 60, bottom: 40 }} barCategoryGap="10%">
                 <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
                 <XAxis
                   dataKey="name"
-                  height={120}
-                  tick={<WrappedAxisTick />}
+                  height={40}
+                  tick={{ fontSize: 10, fill: 'var(--text-muted)' }}
+                  angle={-45}
+                  textAnchor="end"
                   stroke="var(--border)"
                   interval={0}
                 />
@@ -1319,49 +1368,23 @@ export default function CompareView({ selected, groupByList, setGroupByList, ser
                     if (!props.active || !props.payload || props.payload.length === 0) return null;
                     var entry = props.payload[0].payload;
                     if (!entry || entry.isGap || entry.value == null) return null;
-                    var text = formatValue(entry.value);
-                    if (entry.samples > 1 && entry.stddevPct != null) {
-                      text += ' (\u00b1' + entry.stddevPct.toFixed(1) + '%)';
-                    }
-                    var lines = [];
-                    if (entry.name) lines.push(entry.name);
-                    if (entry.groupValue && entry.groupValue !== '__all__')
-                      lines.push(entry.groupValue);
-                    if (entry.seriesValue && entry.seriesValue !== '__all__')
-                      lines.push(formatDimLabel(seriesBy) + ': ' + formatDimValue(seriesBy, entry.seriesValue));
-                    var metricLines = [];
-                    metricLines.push({ label: chart.metricName, value: text, color: entry.color });
-                    supplementalMetrics.forEach(function (sm, si) {
-                      var sv = entry['supp_' + si];
-                      var svPct = entry['supp_' + si + '_stddevPct'];
-                      var svSamples = entry['supp_' + si + '_samples'];
-                      var valText = sv != null ? formatValue(sv) : 'no data';
-                      if (sv != null && svSamples > 1 && svPct != null) {
-                        valText += ' (\u00b1' + svPct.toFixed(1) + '%)';
-                      }
-                      metricLines.push({
-                        label: sm.source + '::' + sm.type,
-                        value: valText,
-                        color: SUPP_COLORS[si % SUPP_COLORS.length],
-                      });
-                    });
                     return (
-                      <div style={{
-                        background: 'var(--surface)', border: '1px solid var(--border)',
-                        borderRadius: 'var(--radius)', padding: '8px 12px', color: 'var(--text)',
-                        fontSize: 12, boxShadow: 'var(--shadow)',
-                      }}>
-                        {lines.map(function (l, i) {
-                          return <div key={i} style={{ color: i === 0 ? 'var(--text)' : 'var(--text-secondary)', marginBottom: 2 }}>{l}</div>;
-                        })}
-                        {metricLines.map(function (ml, i) {
-                          return <div key={'m' + i} style={{ fontWeight: 600, color: ml.color, marginTop: i === 0 ? 4 : 2 }}>{ml.label}: {ml.value}</div>;
-                        })}
+                      <div className="compare-tooltip-mini">
+                        {entry.name}
                       </div>
                     );
                   }}
                 />
-                <Bar dataKey="value" yAxisId="left" radius={[4, 4, 0, 0]}>
+                <Bar dataKey="value" yAxisId="left" radius={[4, 4, 0, 0]} style={{ cursor: 'pointer' }}
+                  onClick={function (data) {
+                    if (data && !data.isGap && data.value != null) {
+                      setPinnedEntry(function (prev) {
+                        if (prev && prev.entry && prev.entry.iterationId === data.iterationId) return null;
+                        return { entry: data, metricName: chart.metricName };
+                      });
+                    }
+                  }}
+                >
                   <ErrorBar dataKey="errorY" width={4} strokeWidth={2} stroke="var(--text-secondary)" />
                   {chart.data.map(function (entry, idx) {
                     return <Cell key={idx} fill={entry.isGap ? 'transparent' : entry.color} />;
@@ -1422,11 +1445,173 @@ export default function CompareView({ selected, groupByList, setGroupByList, ser
               ) : supplementalMetrics.length > 0 ? (
                 <div className="compare-yaxis-label compare-yaxis-right">&nbsp;</div>
               ) : null}
+              <div className="compare-sidebar" style={{ maxHeight: chartHeight }}>
+                {pinnedEntry && pinnedEntry.entry && !pinnedEntry.entry.isGap && pinnedEntry.entry.value != null ? (function () {
+                  var e = pinnedEntry.entry;
+                  var items = [];
+                  var pmText = formatValue(e.value);
+                  if (e.samples > 1 && e.stddevPct != null) pmText += ' (\u00b1' + e.stddevPct.toFixed(1) + '%)';
+                  items.push({ label: chart.metricName, value: pmText, color: e.color });
+                  supplementalMetrics.forEach(function (sm2, si2) {
+                    if (sm2.display === 'panel') return;
+                    var sv = e['supp_' + si2];
+                    items.push({ label: sm2.source + '::' + sm2.type, value: sv != null ? formatValue(sv) : '-', color: SUPP_COLORS[si2 % SUPP_COLORS.length] });
+                  });
+                  return (
+                    <>
+                      <div className="compare-sidebar-iter">{e.name}</div>
+                      {items.map(function (item, ii) {
+                        return (
+                          <div key={ii} className="compare-sidebar-item" style={{ color: item.color }}>
+                            <div className="compare-sidebar-label">{item.label}</div>
+                            <div className="compare-sidebar-value">{item.value}</div>
+                          </div>
+                        );
+                      })}
+                    </>
+                  );
+                })() : <div className="compare-sidebar-empty">Click a bar</div>}
+              </div>
             </div>
+
+            {/* Panel-mode supplemental metrics: rendered below the primary chart */}
+            {supplementalMetrics.map(function (sm, si) {
+              if (sm.display !== 'panel') return null;
+              var color = SUPP_COLORS[si % SUPP_COLORS.length];
+              var dataKey = 'supp_' + si;
+              var vals = [];
+              chart.data.forEach(function (d) {
+                if (d.isGap) return;
+                if (d[dataKey] != null) vals.push(d[dataKey]);
+                Object.keys(d).forEach(function (k) {
+                  if (k.startsWith(dataKey + '_') && !k.endsWith('_stddevPct') && !k.endsWith('_error') && !k.endsWith('_samples') && d[k] != null) {
+                    vals.push(d[k]);
+                  }
+                });
+              });
+              var min = vals.length > 0 ? Math.min.apply(null, vals) : 0;
+              var max = vals.length > 0 ? Math.max.apply(null, vals) : 1;
+              var pad = (max - min) * 0.1 || 0.1;
+              return (
+                <div key={'panel-' + si} className="compare-panel-metric">
+                  <div className="compare-chart-with-labels">
+                    <div className="compare-yaxis-label compare-yaxis-left" style={{ color: color }}>{sm.source}::{sm.type}</div>
+                    <div className="compare-chart-area">
+                  <ResponsiveContainer width="100%" height={180}>
+                    <ComposedChart data={chart.data} margin={{ top: 10, right: 30, left: 60, bottom: 5 }} barCategoryGap="10%">
+                      <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
+                      <XAxis dataKey="name" hide={true} />
+                      <YAxis
+                        yAxisId="left"
+                        domain={[Math.max(0, min - pad), max + pad]}
+                        tick={{ fontSize: 11, fill: 'var(--text-secondary)' }}
+                        tickFormatter={formatYTick}
+                        stroke="var(--border)"
+                      />
+                      <Tooltip
+                        content={function (props) {
+                          if (!props.active || !props.payload || props.payload.length === 0) return null;
+                          var entry = props.payload[0].payload;
+                          if (!entry || entry.isGap) return null;
+                          return (
+                            <div className="compare-tooltip-mini">
+                              {entry.name}
+                            </div>
+                          );
+                        }}
+                      />
+                      {hasOverlays ? (
+                        <YAxis yAxisId="right" orientation="right" width={80} tick={false} axisLine={false} />
+                      ) : (
+                        <YAxis yAxisId="right" orientation="right" width={1} tick={false} axisLine={false} />
+                      )}
+                      {(function () {
+                        if (sm.breakouts.length > 0) {
+                          var labelSet = new Set();
+                          chart.data.forEach(function (d) {
+                            if (d.isGap) return;
+                            Object.keys(d).forEach(function (k) {
+                              var prefix = dataKey + '_';
+                              if (k.startsWith(prefix) && !k.endsWith('_stddevPct') && !k.endsWith('_error') && !k.endsWith('_samples')) {
+                                labelSet.add(k);
+                              }
+                            });
+                          });
+                          var labels = Array.from(labelSet).sort(naturalCompare);
+                          var ct = sm.chartType || 'bar';
+                          if (labels.length > 0) {
+                            return labels.map(function (lk, li) {
+                              var labelName = lk.substring((dataKey + '_').length);
+                              var itemColor = SUPP_COLORS[(si + li) % SUPP_COLORS.length];
+                              if (ct === 'line') {
+                                return (
+                                  <Line key={lk} dataKey={lk} yAxisId="left" type="monotone"
+                                    stroke={itemColor} strokeWidth={2}
+                                    dot={{ r: 4, fill: itemColor }}
+                                    connectNulls={false} name={labelName} />
+                                );
+                              }
+                              return (
+                                <Bar key={lk} dataKey={lk} yAxisId="left"
+                                  radius={ct === 'stacked' ? [0, 0, 0, 0] : [3, 3, 0, 0]}
+                                  stackId={ct === 'stacked' ? 'stack' : undefined}
+                                  name={labelName}>
+                                  {chart.data.map(function (entry, idx) {
+                                    return <Cell key={idx} fill={entry.isGap ? 'transparent' : itemColor} fillOpacity={0.7} />;
+                                  })}
+                                </Bar>
+                              );
+                            });
+                          }
+                        }
+                        return (
+                          <Bar dataKey={dataKey} yAxisId="left" radius={[3, 3, 0, 0]}>
+                            <ErrorBar dataKey={dataKey + '_error'} width={4} strokeWidth={2} stroke="var(--text-secondary)" />
+                            {chart.data.map(function (entry, idx) {
+                              return <Cell key={idx} fill={entry.isGap ? 'transparent' : color} fillOpacity={0.7} />;
+                            })}
+                          </Bar>
+                        );
+                      })()}
+                    </ComposedChart>
+                  </ResponsiveContainer>
+                    </div>
+                    {supplementalMetrics.length > 0 && <div className="compare-yaxis-label compare-yaxis-right">&nbsp;</div>}
+                    <div className="compare-sidebar" style={{ maxHeight: 180 }}>
+                    {pinnedEntry && pinnedEntry.entry && !pinnedEntry.entry.isGap ? (function () {
+                      var e = pinnedEntry.entry;
+                      var items = [];
+                      if (sm.breakouts.length > 0) {
+                        var prefix = dataKey + '_';
+                        Object.keys(e).filter(function (k) {
+                          return k.startsWith(prefix) && !k.endsWith('_stddevPct') && !k.endsWith('_error') && !k.endsWith('_samples');
+                        }).sort(naturalCompare).forEach(function (k, ki) {
+                          var labelName = k.substring(prefix.length);
+                          items.push({ label: labelName, value: e[k] != null ? formatValue(e[k]) : '-', color: SUPP_COLORS[(si + ki) % SUPP_COLORS.length] });
+                        });
+                      } else {
+                        var v = e[dataKey];
+                        items.push({ label: sm.source + '::' + sm.type, value: v != null ? formatValue(v) : '-', color: color });
+                      }
+                      return items.map(function (item, ii) {
+                        return (
+                          <div key={ii} className="compare-sidebar-item" style={{ color: item.color }}>
+                            <div className="compare-sidebar-label">{item.label}</div>
+                            <div className="compare-sidebar-value">{item.value}</div>
+                          </div>
+                        );
+                      });
+                    })() : <div className="compare-sidebar-empty">Click a bar</div>}
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
 
           </div>
         );
       })}
+
     </div>
   );
 }
