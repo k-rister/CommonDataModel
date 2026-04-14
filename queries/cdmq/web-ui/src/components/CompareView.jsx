@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useCallback, useRef, useImperativeHandle, forwardRef } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef, useImperativeHandle, forwardRef } from 'react';
 import { ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip, ErrorBar, ResponsiveContainer, Legend, Cell, ReferenceLine, LabelList } from 'recharts';
 import * as api from '../api/cdm';
 import { timeWork } from '../debugLog';
@@ -1075,6 +1075,85 @@ const CompareView = forwardRef(function CompareView({ selected, groupByList, set
     );
   }
 
+  function renderMetricControls(sm, si) {
+    var color = SUPP_COLORS[si % SUPP_COLORS.length];
+    return (
+      <div key={'ctrl-' + si} className="compare-metric-row" style={{ borderLeftColor: color }}>
+        <div className="compare-metric-row-header">
+          {sm.loading && <span className="spinner" style={{ marginLeft: 8 }} />}
+          {!sm.loading && sm.remainingBreakouts && sm.remainingBreakouts.length > 0 && (
+            <select className="compare-breakout-select" value="" onChange={function (e) { if (e.target.value) handleAddBreakout(si, e.target.value); }}>
+              <option value="">+ Breakout</option>
+              {sm.remainingBreakouts.map(function (b) { return <option key={b} value={b}>{b}</option>; })}
+            </select>
+          )}
+          {sm.breakouts.length > 0 && (
+            <select className="compare-breakout-select" value={sm.chartType || 'bar'} onChange={function (e) { handleChartTypeChange(si, e.target.value); }}>
+              <option value="bar">Bars</option>
+              <option value="stacked">Stacked</option>
+              <option value="line">Lines</option>
+            </select>
+          )}
+          {(function () {
+            var sampleVals = null;
+            for (var ii = 0; ii < iterations.length; ii++) {
+              var mv2 = metricValues[iterations[ii].iterationId];
+              if (mv2 && mv2.sampleValues && mv2.sampleValues.length > 1) { sampleVals = mv2.sampleValues; break; }
+            }
+            if (!sampleVals || sampleVals.length <= 1) return null;
+            return (
+              <span className="compare-filter-group">
+                <label className="compare-filter-label">Sample:</label>
+                <select className="compare-breakout-select" value={sm.sampleIndex != null ? sm.sampleIndex : 'auto'} onChange={function (e) { handleSampleChange(si, e.target.value); }}>
+                  <option value="auto">Best (auto)</option>
+                  {sampleVals.map(function (pmv, idx2) {
+                    var label2 = 'Sample ' + (idx2 + 1);
+                    if (pmv != null) label2 += ' (' + formatValue(pmv) + ')';
+                    return <option key={idx2} value={idx2}>{label2}</option>;
+                  })}
+                </select>
+              </span>
+            );
+          })()}
+          <span className="compare-filter-group">
+            <label className="compare-filter-label">Filter:</label>
+            <input className="compare-filter-input" type="text" placeholder="e.g. gt:0.01" value={sm.filter || ''} title="gt:N, ge:N, lt:N, le:N"
+              onClick={function (e) { e.stopPropagation(); }}
+              onChange={function (e) { handleUpdateFilter(si, e.target.value); }}
+              onKeyDown={function (e) { if (e.key === 'Enter') { e.preventDefault(); handleApplyFilter(si); } }}
+            />
+            {sm.filter && (
+              <button className="btn btn-sm btn-secondary" onClick={function () { handleApplyFilter(si); }} disabled={sm.loading} style={{ fontSize: 10, padding: '2px 6px' }}>Apply</button>
+            )}
+          </span>
+          <button className="compare-metric-remove" onClick={function () { handleRemoveMetric(si); }}>&times;</button>
+        </div>
+        {sm.breakouts.length > 0 && (
+          <div className="compare-metric-breakouts">
+            {sm.breakouts.map(function (b, bi) {
+              var eqIdx = b.indexOf('=');
+              var fieldName = eqIdx >= 0 ? b.substring(0, eqIdx) : b;
+              var filterVal = eqIdx >= 0 ? b.substring(eqIdx + 1) : '';
+              return (
+                <span key={bi} className="compare-breakout-chip">
+                  <span className="compare-breakout-field">{fieldName}</span>
+                  <input className="compare-breakout-filter" type="text" placeholder="all" value={filterVal}
+                    title="Filter: exact value, val1+val2, r/regex/, R/regex/"
+                    onClick={function (e) { e.stopPropagation(); }}
+                    onChange={function (e) { var newVal = e.target.value; handleUpdateBreakoutFilter(si, bi, newVal ? fieldName + '=' + newVal : fieldName); }}
+                    onKeyDown={function (e) { if (e.key === 'Enter') { e.preventDefault(); handleApplyBreakoutFilter(si); } }}
+                  />
+                  <button onClick={function () { handleRemoveBreakout(si, bi); }}>&times;</button>
+                </span>
+              );
+            })}
+            <button className="btn btn-sm btn-secondary" onClick={function () { handleApplyBreakoutFilter(si); }} disabled={sm.loading} style={{ fontSize: 10, padding: '2px 6px' }}>Apply</button>
+          </div>
+        )}
+      </div>
+    );
+  }
+
   return (
     <div className="compare-view">
       <div className="compare-controls">
@@ -1198,134 +1277,6 @@ const CompareView = forwardRef(function CompareView({ selected, groupByList, set
           <button className="btn btn-sm btn-secondary" onClick={function () { setShowAddMetric(false); }}>Cancel</button>
         )}
       </div>
-      {supplementalMetrics.length > 0 && (
-        <div className="compare-metric-panel">
-          {supplementalMetrics.map(function (sm, si) {
-            var color = SUPP_COLORS[si % SUPP_COLORS.length];
-            return (
-              <div key={si} className="compare-metric-row" style={{ borderLeftColor: color }}>
-                <div className="compare-metric-row-header">
-                  <span className="compare-metric-name" style={{ color: color }}>{sm.source}::{sm.type}</span>
-                  <span className="compare-supp-mode">{sm.display === 'panel' ? 'panel' : 'overlay'}</span>
-                  {sm.loading && <span className="spinner" style={{ marginLeft: 8 }} />}
-                  {!sm.loading && sm.remainingBreakouts && sm.remainingBreakouts.length > 0 && (
-                    <select
-                      className="compare-breakout-select"
-                      value=""
-                      onChange={function (e) { if (e.target.value) handleAddBreakout(si, e.target.value); }}
-                    >
-                      <option value="">+ Breakout</option>
-                      {sm.remainingBreakouts.map(function (b) { return <option key={b} value={b}>{b}</option>; })}
-                    </select>
-                  )}
-                  {sm.breakouts.length > 0 && (
-                    <select
-                      className="compare-breakout-select"
-                      value={sm.chartType || 'bar'}
-                      onChange={function (e) { handleChartTypeChange(si, e.target.value); }}
-                    >
-                      <option value="bar">Bars</option>
-                      <option value="stacked">Stacked</option>
-                      <option value="line">Lines</option>
-                    </select>
-                  )}
-                  {(function () {
-                    // Show sample selector using primary metric values from metricValues
-                    // Find first iteration with multiple samples
-                    var sampleVals = null;
-                    for (var ii = 0; ii < iterations.length; ii++) {
-                      var mv2 = metricValues[iterations[ii].iterationId];
-                      if (mv2 && mv2.sampleValues && mv2.sampleValues.length > 1) {
-                        sampleVals = mv2.sampleValues;
-                        break;
-                      }
-                    }
-                    if (!sampleVals || sampleVals.length <= 1) return null;
-                    return (
-                      <span className="compare-filter-group">
-                        <label className="compare-filter-label">Sample:</label>
-                        <select
-                          className="compare-breakout-select"
-                          value={sm.sampleIndex != null ? sm.sampleIndex : 'auto'}
-                          onChange={function (e) { handleSampleChange(si, e.target.value); }}
-                        >
-                          <option value="auto">Best (auto)</option>
-                          {sampleVals.map(function (pmv, idx2) {
-                            var label2 = 'Sample ' + (idx2 + 1);
-                            if (pmv != null) label2 += ' (' + formatValue(pmv) + ')';
-                            return <option key={idx2} value={idx2}>{label2}</option>;
-                          })}
-                        </select>
-                      </span>
-                    );
-                  })()}
-                  <span className="compare-filter-group">
-                    <label className="compare-filter-label">Filter:</label>
-                    <input
-                      className="compare-filter-input"
-                      type="text"
-                      placeholder="e.g. gt:0.01"
-                      value={sm.filter || ''}
-                      title="gt:N, ge:N, lt:N, le:N"
-                      onClick={function (e) { e.stopPropagation(); }}
-                      onChange={function (e) { handleUpdateFilter(si, e.target.value); }}
-                      onKeyDown={function (e) {
-                        if (e.key === 'Enter') { e.preventDefault(); handleApplyFilter(si); }
-                      }}
-                    />
-                    {sm.filter && (
-                      <button className="btn btn-sm btn-secondary" onClick={function () { handleApplyFilter(si); }}
-                        disabled={sm.loading} style={{ fontSize: 10, padding: '2px 6px' }}>
-                        Apply
-                      </button>
-                    )}
-                  </span>
-                  <button className="compare-metric-remove" onClick={function () { handleRemoveMetric(si); }}>&times;</button>
-                </div>
-                {sm.breakouts.length > 0 && (
-                  <div className="compare-metric-breakouts">
-                    {sm.breakouts.map(function (b, bi) {
-                      // Parse breakout: "field" or "field=value"
-                      var eqIdx = b.indexOf('=');
-                      var fieldName = eqIdx >= 0 ? b.substring(0, eqIdx) : b;
-                      var filterVal = eqIdx >= 0 ? b.substring(eqIdx + 1) : '';
-                      return (
-                        <span key={bi} className="compare-breakout-chip">
-                          <span className="compare-breakout-field">{fieldName}</span>
-                          <input
-                            className="compare-breakout-filter"
-                            type="text"
-                            placeholder="all"
-                            value={filterVal}
-                            title="Filter: exact value, val1+val2, r/regex/, R/regex/"
-                            onClick={function (e) { e.stopPropagation(); }}
-                            onChange={function (e) {
-                              var newVal = e.target.value;
-                              var newBreakout = newVal ? fieldName + '=' + newVal : fieldName;
-                              handleUpdateBreakoutFilter(si, bi, newBreakout);
-                            }}
-                            onKeyDown={function (e) {
-                              if (e.key === 'Enter') {
-                                e.preventDefault();
-                                handleApplyBreakoutFilter(si);
-                              }
-                            }}
-                          />
-                          <button onClick={function () { handleRemoveBreakout(si, bi); }}>&times;</button>
-                        </span>
-                      );
-                    })}
-                    <button className="btn btn-sm btn-secondary" onClick={function () { handleApplyBreakoutFilter(si); }}
-                      disabled={sm.loading} style={{ fontSize: 10, padding: '2px 6px' }}>
-                      Apply
-                    </button>
-                  </div>
-                )}
-              </div>
-            );
-          })}
-        </div>
-      )}
 
       {charts.map(function (chart, ci) {
         var nonGapData = chart.data.filter(function (d) { return !d.isGap; });
@@ -1372,7 +1323,8 @@ const CompareView = forwardRef(function CompareView({ selected, groupByList, set
               var max = vals.length > 0 ? Math.max.apply(null, vals) : 1;
               var pad = (max - min) * 0.1 || 0.1;
               return (
-                <div key={'panel-' + si} className="compare-panel-metric">
+                <React.Fragment key={'panel-' + si}>
+                <div className="compare-panel-metric">
                   <div className="compare-chart-with-labels">
                     <div className="compare-yaxis-label compare-yaxis-left" style={{ color: color }}>{sm.source}::{sm.type}</div>
                     <div className="compare-chart-area">
@@ -1550,6 +1502,7 @@ const CompareView = forwardRef(function CompareView({ selected, groupByList, set
                     </div>
                   </div>
                 </div>
+              </React.Fragment>
               );
             })}
 
@@ -1778,6 +1731,45 @@ const CompareView = forwardRef(function CompareView({ selected, groupByList, set
               </div>
             </div>
 
+            {/* Primary metric controls */}
+            {(function () {
+              // Get primary metric source/type from first iteration
+              var pmStr = iterations.length > 0 ? iterations[0].primaryMetric : null;
+              if (!pmStr || typeof pmStr !== 'string') return null;
+              var pmParts = pmStr.split('::');
+              if (pmParts.length < 2) return null;
+              // Check if primary metric is already added as supplemental
+              var alreadyAdded = supplementalMetrics.some(function (m) { return m.source === pmParts[0] && m.type === pmParts[1]; });
+              if (alreadyAdded) return null;
+              return (
+                <div className="compare-primary-controls">
+                  <button className="btn btn-sm btn-secondary" onClick={function () {
+                    var ctx = getRunContext();
+                    var bestIdx = computeBestSampleIndex();
+                    setAddMetricLoading(true);
+                    timeWork('Add primary metric refinement ' + pmStr, function () {
+                      return api.getSupplementalMetric({
+                        iterations: ctx.iterations, start: ctx.start, end: ctx.end,
+                        source: pmParts[0], type: pmParts[1], sampleIndex: bestIdx,
+                      });
+                    }).then(function (res) {
+                      setSupplementalMetrics(function (prev) {
+                        return prev.concat([{
+                          source: pmParts[0], type: pmParts[1],
+                          values: res.values || {}, display: 'panel',
+                          chartType: 'bar', filter: '', sampleIndex: bestIdx,
+                          breakouts: [], remainingBreakouts: res.remainingBreakouts || [],
+                          loading: false,
+                        }]);
+                      });
+                    }).finally(function () { setAddMetricLoading(false); });
+                  }}>
+                    Refine {pmStr}
+                  </button>
+                </div>
+              );
+            })()}
+
             {/* Panel-mode supplemental metrics: rendered below the primary chart */}
             {supplementalMetrics.map(function (sm, si) {
               if (sm.display !== 'panel') return null;
@@ -1797,7 +1789,8 @@ const CompareView = forwardRef(function CompareView({ selected, groupByList, set
               var max = vals.length > 0 ? Math.max.apply(null, vals) : 1;
               var pad = (max - min) * 0.1 || 0.1;
               return (
-                <div key={'panel-' + si} className="compare-panel-metric">
+                <React.Fragment key={'panel-' + si}>
+                <div className="compare-panel-metric">
                   <div className="compare-chart-with-labels">
                     <div className="compare-yaxis-label compare-yaxis-left" style={{ color: color }}>{sm.source}::{sm.type}</div>
                     <div className="compare-chart-area">
@@ -1975,7 +1968,15 @@ const CompareView = forwardRef(function CompareView({ selected, groupByList, set
                     </div>
                   </div>
                 </div>
+                {renderMetricControls(sm, si)}
+              </React.Fragment>
               );
+            })}
+
+            {/* Overlay-mode metric controls: rendered below the primary chart */}
+            {supplementalMetrics.map(function (sm, si) {
+              if (sm.display === 'panel') return null;
+              return renderMetricControls(sm, si);
             })}
 
           </div>
