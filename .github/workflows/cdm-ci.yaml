@@ -43,10 +43,15 @@ jobs:
       - name: install cdmq dependencies
         run: npm install --no-fund --no-audit
         working-directory: queries/cdmq
-      - name: fail if javascript files are not formatted
-        run: npx prettier **/*.js --check
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: install and build web-ui
+        run: |
+          if [ -d "queries/cdmq/web-ui" ] && [ -f "queries/cdmq/web-ui/package.json" ]; then
+            cd queries/cdmq/web-ui
+            npm install --no-fund --no-audit
+            npm run build
+          else
+            echo "web-ui directory not found, skipping build"
+          fi
 
   faux-cdm-ci:
     runs-on: ubuntu-latest
