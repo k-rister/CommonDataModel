@@ -7,7 +7,7 @@ import DebugConsole from './components/DebugConsole';
 import './index.css';
 
 // Encode workflow state into a URL hash string
-function encodeState(filters, selectedRunIds, view, groupByList) {
+function encodeState(filters, selectedRunIds, view, groupByList, hiddenFields, supplementalMetrics) {
   var state = {};
   if (filters) {
     if (filters.benchmark) state.benchmark = filters.benchmark;
@@ -23,6 +23,17 @@ function encodeState(filters, selectedRunIds, view, groupByList) {
   if (selectedRunIds && selectedRunIds.length > 0) state.selectedRuns = selectedRunIds;
   if (view && view !== 'search') state.view = view;
   if (groupByList && groupByList.length > 0) state.groupBy = groupByList;
+  if (hiddenFields && hiddenFields.length > 0) state.hidden = hiddenFields;
+  if (supplementalMetrics && supplementalMetrics.length > 0) {
+    state.metrics = supplementalMetrics.map(function (m) {
+      var entry = { source: m.source, type: m.type, display: m.display };
+      if (m.chartType && m.chartType !== 'bar') entry.chartType = m.chartType;
+      if (m.breakouts && m.breakouts.length > 0) entry.breakouts = m.breakouts;
+      if (m.filter) entry.filter = m.filter;
+      if (m.sampleIndex != null) entry.sampleIndex = m.sampleIndex;
+      return entry;
+    });
+  }
   return '#' + encodeURIComponent(JSON.stringify(state));
 }
 
@@ -44,6 +55,7 @@ export default function App() {
   }, [theme]);
 
   const searchRef = useRef(null);
+  const compareRef = useRef(null);
   const [iterations, setIterations] = useState([]);
   const [selected, setSelected] = useState(new Map());
   const [loading, setLoading] = useState(false);
@@ -54,6 +66,7 @@ export default function App() {
   const [shareMsg, setShareMsg] = useState('');
   const lastFilters = useRef(null);
   const restoredState = useRef(null);
+  const [restoredMetrics, setRestoredMetrics] = useState(null);
 
   // On mount, check for state in URL hash
   // Don't switch view yet — wait until search completes and selections are applied
@@ -62,6 +75,8 @@ export default function App() {
     if (state) {
       restoredState.current = state;
       if (state.groupBy) setGroupByList(Array.isArray(state.groupBy) ? state.groupBy : [state.groupBy]);
+      if (state.hidden) setHiddenFields(Array.isArray(state.hidden) ? state.hidden : []);
+      if (state.metrics) setRestoredMetrics(state.metrics);
     }
   }, []);
 
@@ -148,7 +163,8 @@ export default function App() {
     var runIdSet = new Set();
     selected.forEach(function (it) { runIdSet.add(it.runId); });
     var selectedRunIds = Array.from(runIdSet);
-    var hash = encodeState(filters, selectedRunIds, view, groupByList);
+    var suppMetrics = compareRef.current ? compareRef.current.getSupplementalMetrics() : null;
+    var hash = encodeState(filters, selectedRunIds, view, groupByList, hiddenFields, suppMetrics);
     var url = window.location.origin + window.location.pathname + hash;
     // Update the URL bar so the user can see and copy it directly
     window.history.replaceState(null, '', hash);
@@ -230,7 +246,7 @@ export default function App() {
       )}
 
       {view === 'compare' && (
-        <CompareView selected={selected} groupByList={groupByList} setGroupByList={setGroupByList} hiddenFields={hiddenFields} setHiddenFields={setHiddenFields} />
+        <CompareView ref={compareRef} selected={selected} groupByList={groupByList} setGroupByList={setGroupByList} hiddenFields={hiddenFields} setHiddenFields={setHiddenFields} restoredMetrics={restoredMetrics} />
       )}
 
       {view === 'deepdive' && (

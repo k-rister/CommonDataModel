@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useCallback } from 'react';
+import { useState, useEffect, useMemo, useCallback, useRef, useImperativeHandle, forwardRef } from 'react';
 import { ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip, ErrorBar, ResponsiveContainer, Legend, Cell, ReferenceLine, LabelList } from 'recharts';
 import * as api from '../api/cdm';
 import { timeWork } from '../debugLog';
@@ -28,6 +28,8 @@ function formatYTick(value) {
 // Compact value for bar labels — max 4 significant digits
 function formatBarLabel(v) {
   if (v == null) return '';
+  v = Number(v);
+  if (isNaN(v)) return '';
   var abs = Math.abs(v);
   if (abs === 0) return '0';
   if (abs >= 1000000) return (v / 1000000).toPrecision(3) + 'M';
@@ -39,6 +41,8 @@ function formatBarLabel(v) {
 
 function formatValue(v) {
   if (v == null) return '';
+  v = Number(v);
+  if (isNaN(v)) return '';
   if (Math.abs(v) >= 1000) return v.toFixed(0);
   if (Math.abs(v) >= 1) return v.toFixed(2);
   return v.toPrecision(3);
@@ -488,7 +492,7 @@ function buildDimOptions(iterations) {
   return opts;
 }
 
-export default function CompareView({ selected, groupByList, setGroupByList, hiddenFields, setHiddenFields }) {
+const CompareView = forwardRef(function CompareView({ selected, groupByList, setGroupByList, hiddenFields, setHiddenFields, restoredMetrics }, ref) {
   var [metricValues, setMetricValues] = useState({});
   var [loading, setLoading] = useState(false);
   var [supplementalMetrics, setSupplementalMetrics] = useState([]); // [{ source, type, values: {iterId: {mean,...}} }]
@@ -504,6 +508,12 @@ export default function CompareView({ selected, groupByList, setGroupByList, hid
   var iterations = useMemo(function () {
     return Array.from(selected.values());
   }, [selected]);
+
+  useImperativeHandle(ref, function () {
+    return {
+      getSupplementalMetrics: function () { return supplementalMetrics; },
+    };
+  }, [supplementalMetrics]);
 
   // Helper to get run IDs and date range from iterations
   function getRunContext() {
@@ -573,6 +583,44 @@ export default function CompareView({ selected, groupByList, setGroupByList, hid
       handleAutoGroup();
     }
   }, [iterations.length > 0 && dimOptions.length > 1]);
+
+  // Restore supplemental metrics from URL state
+  var restoredMetricsApplied = useRef(false);
+  useEffect(function () {
+    if (restoredMetricsApplied.current) return;
+    if (!restoredMetrics || restoredMetrics.length === 0) return;
+    if (iterations.length === 0) return;
+    restoredMetricsApplied.current = true;
+    var ctx = getRunContext();
+    restoredMetrics.forEach(function (rm) {
+      var bestIdx = computeBestSampleIndex();
+      var sIdx = rm.sampleIndex != null ? rm.sampleIndex : bestIdx;
+      timeWork('Restore ' + rm.source + '::' + rm.type, function () {
+        return api.getSupplementalMetric({
+          iterations: ctx.iterations, start: ctx.start, end: ctx.end,
+          source: rm.source, type: rm.type,
+          breakout: rm.breakouts || [],
+          filter: rm.filter || null,
+          sampleIndex: sIdx,
+        });
+      }).then(function (res) {
+        setSupplementalMetrics(function (prev) {
+          return prev.concat([{
+            source: rm.source,
+            type: rm.type,
+            values: res.values || {},
+            display: rm.display || 'panel',
+            chartType: rm.chartType || 'bar',
+            filter: rm.filter || '',
+            sampleIndex: sIdx,
+            breakouts: rm.breakouts || [],
+            remainingBreakouts: res.remainingBreakouts || [],
+            loading: false,
+          }]);
+        });
+      });
+    });
+  }, [iterations.length > 0]);
 
   var handleShowAddMetric = useCallback(function () {
     setShowAddMetric(true);
@@ -1936,4 +1984,6 @@ export default function CompareView({ selected, groupByList, setGroupByList, hid
 
     </div>
   );
-}
+});
+
+export default CompareView;
