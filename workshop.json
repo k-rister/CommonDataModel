@@ -1,0 +1,26 @@
+{
+    "workshop": {
+        "schema": {
+            "version": "2020.03.02"
+        }
+    },
+    "userenvs": [
+        {
+            "name": "crucible-controller",
+            "requirements": [
+                "nodejs"
+            ]
+        }
+    ],
+    "requirements": [
+        {
+            "name": "nodejs",
+            "type": "distro",
+            "distro_info": {
+                "packages": [
+                    "nodejs"
+                ]
+            }
+        }
+    ]
+}
