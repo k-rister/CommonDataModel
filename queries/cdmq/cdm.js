@@ -452,51 +452,56 @@ getCdmVerFromIndex = function (index) {
 // This will eliminate the need for other projects (like Crucible)
 // to maintain the indices.
 checkCreateIndex = function (instance, index) {
+  // Expand comma-separated multi-index patterns and check/create each one
+  var indices = index.includes(',') ? index.split(',') : [index];
+
   var retMsg = '';
   var retCode = 0;
 
-  var resp = getCdmVerFromIndex(index);
-  if (resp['ret-code'] != 0) {
-    retMsg = 'ERROR: calling getCdmVerFromIndex returned ' + resp['ret-msg'];
-    retCode = 1;
-    return createResponse(retCode, retMsg);
-  }
-  var cdmVer = resp['cdm-ver'];
+  for (var idx = 0; idx < indices.length; idx++) {
+    var thisIndex = indices[idx];
 
-  if (Object.keys(instance['indices']).includes(cdmVer)) {
-    if (instance['indices'][cdmVer].includes(index)) {
-      var retMsg = 'INFO: Not going to create index because index already exists';
+    var resp = getCdmVerFromIndex(thisIndex);
+    if (resp['ret-code'] != 0) {
+      retMsg = 'ERROR: calling getCdmVerFromIndex returned ' + resp['ret-msg'];
+      retCode = 1;
       return createResponse(retCode, retMsg);
     }
+    var cdmVer = resp['cdm-ver'];
+
+    if (Object.keys(instance['indices']).includes(cdmVer)) {
+      if (instance['indices'][cdmVer].includes(thisIndex)) {
+        continue;
+      }
+    }
+
+    var regExp = /\*$/;
+    var matches = regExp.exec(thisIndex);
+    if (matches) {
+      continue;
+    }
+
+    resp = getDocType(thisIndex);
+    if (resp['ret-code'] != 0) {
+      retMsg = 'ERROR: calling getDocType returned ' + resp['ret-msg'];
+      retCode = 1;
+      return createResponse(retCode, retMsg);
+    }
+    var docType = resp['doc-type'];
+
+    debuglog('checkCreateIndex(): got docType: [' + docType + ']');
+    var url = 'http://' + instance['host'] + '/' + thisIndex;
+    resp = request('PUT', url, { headers: instance['header'], body: JSON.stringify(indexDefs[cdmVer][docType]) });
+    var data = JSON.parse(resp.getBody());
+    //TODO: catch error and return with error
+    debuglog('response:::\n' + JSON.stringify(data, null, 2));
+    if (!Object.keys(instance['indices']).includes(cdmVer)) {
+      instance['indices'][cdmVer] = [];
+    }
+    instance['indices'][cdmVer].push(thisIndex);
   }
 
-  var regExp = /\*$/;
-  var matches = regExp.exec(index);
-  if (matches) {
-    retMsg = 'INFO: Not going to create index because it includes a wildcard: [' + index + ']';
-    return createResponse(retCode, retMsg);
-  }
-
-  resp = getDocType(index);
-  if (resp['ret-code'] != 0) {
-    retMsg = 'ERROR: calling getDocType returned ' + resp['ret-msg'];
-    retCode = 1;
-    return createResponse(retCode, retMsg);
-  }
-  var docType = resp['doc-type'];
-
-  debuglog('checkCreateIndex(): got docType: [' + docType + ']');
-  var url = 'http://' + instance['host'] + '/' + index;
-  resp = request('PUT', url, { headers: instance['header'], body: JSON.stringify(indexDefs[cdmVer][docType]) });
-  var data = JSON.parse(resp.getBody());
-  //TODO: catch error and return with error
-  debuglog('response:::\n' + JSON.stringify(data, null, 2));
-  if (!Object.keys(instance['indices']).includes(cdmVer)) {
-    instance['indices'][cdmVer] = [];
-  }
-  instance['indices'][cdmVer].push(index);
-  //TODO: query opensearch to verify index is present
-  var retMsg = 'INFO: Created index [' + index + ']';
+  retMsg = 'INFO: checkCreateIndex completed for ' + indices.length + ' index(es)';
   return createResponse(retCode, retMsg);
 };
 exports.checkCreateIndex = checkCreateIndex;
@@ -579,13 +584,15 @@ function getIndexName(docType, instance, yearDotMonth) {
   const baseName = getIndexBaseName(instance);
   cdmVer = getCdmVer(instance);
   if (cdmVer == 'v7dev' || cdmVer == 'v8dev') {
-    name = docType;
-  } else {
-    name = docType + yearDotMonth;
+    var fullName = baseName + docType;
+    checkCreateIndex(instance, fullName);
+    return fullName;
   }
-  fullName = baseName + name;
-  //debuglog('getIndexName() fullName: [' + fullName + ']');
-  // necessary?
+  // yearDotMonth may be comma-separated suffixes (e.g., "@2025.01,@2025.02").
+  // Expand each suffix into a full index name with baseName+docType.
+  var suffixes = yearDotMonth.split(',');
+  var names = suffixes.map(function (s) { return baseName + docType + s; });
+  var fullName = names.join(',');
   checkCreateIndex(instance, fullName);
   return fullName;
 }
@@ -724,11 +731,24 @@ esJsonArrRequest = async function (instance, docType, action, jsonArr, yearDotMo
 
   var thisJson = '';
   var url = '';
+  var numIndices = 1;
   if (docType == '') {
     // Expect to have the Index and action in the jsonArr itself
     url = 'http://' + instance['host'] + '/_bulk';
   } else {
-    url = 'http://' + instance['host'] + '/' + getIndexName(docType, instance, yearDotMonth) + action;
+    var indexName = getIndexName(docType, instance, yearDotMonth);
+    if (indexName.includes(',')) {
+      // Multi-index: put index in each NDJSON header line instead of the URL
+      url = 'http://' + instance['host'] + action;
+      var indices = indexName.split(',');
+      numIndices = indices.length;
+      var indexHeader = JSON.stringify({ index: indices });
+      for (var j = 0; j < jsonArr.length; j += 2) {
+        jsonArr[j] = indexHeader;
+      }
+    } else {
+      url = 'http://' + instance['host'] + '/' + indexName + action;
+    }
   }
   var max = 16384;
   var idx = 0;
@@ -775,7 +795,11 @@ esJsonArrRequest = async function (instance, docType, action, jsonArr, yearDotMo
     }
 
     debuglog('esJsonArrRequest reqs.length:\n' + reqs.length);
-    var responses = await fetchBatchedData(instance, reqs);
+    // Scale down fetch concurrency for multi-index queries to avoid
+    // overwhelming OpenSearch's search thread pool queue (capacity ~1000).
+    // Each concurrent batch generates numIndices * queriesPerBatch shard queries.
+    var batchSize = numIndices > 1 ? Math.max(1, Math.floor(16 / numIndices)) : 16;
+    var responses = await fetchBatchedData(instance, reqs, batchSize);
     reqs = [];
 
     debuglog('esJsonArrRequest jsonArr MB: ' + numMBytes(jsonArr));
@@ -825,14 +849,17 @@ mSearch = async function (instance, index, yearDotMonth, termKeys, values, sourc
   if (typeof termKeys !== typeof []) return;
   if (typeof values !== typeof []) return;
   var jsonArr = [];
-  for (var i = 0; i < values[0].length; i++) {
+  // When no filters are provided, issue a single match-all query
+  var numQueries = termKeys.length === 0 ? 1 : values[0].length;
+  for (var i = 0; i < numQueries; i++) {
     var req = { query: { bool: { filter: [] } } };
     if (source !== '' && source !== null) {
       req._source = source;
     }
     for (var x = 0; x < termKeys.length; x++) {
-      var termStr = '{ "term": { "' + termKeys[x] + '": "' + values[x][i] + '"}}';
-      req['query']['bool']['filter'].push(JSON.parse(termStr));
+      var termObj = { term: {} };
+      termObj.term[termKeys[x]] = values[x][i];
+      req['query']['bool']['filter'].push(termObj);
 
       if (isDefined(size)) {
         req.size = size;
@@ -840,6 +867,11 @@ mSearch = async function (instance, index, yearDotMonth, termKeys, values, sourc
         req.size = bigQuerySize;
       }
 
+      if (isDefined(sort)) req.sort = sort;
+    }
+    // When no term filters were added, set size/sort outside the loop
+    if (termKeys.length === 0) {
+      req.size = isDefined(size) ? size : bigQuerySize;
       if (isDefined(sort)) req.sort = sort;
     }
     // aggs is not an array, and is used the same for all queries
@@ -877,7 +909,8 @@ mSearch = async function (instance, index, yearDotMonth, termKeys, values, sourc
       if (responses[i].hits == null) {
         console.log('WARNING! msearch returned data.responses[' + i + '].hits is NULL');
         console.log(JSON.stringify(responses[i], null, 2));
-        return;
+        retData[i] = [];
+        continue;
       }
       if (Array.isArray(responses[i].hits.hits) && responses[i].hits.hits.length > 0) {
         if (
@@ -1137,8 +1170,10 @@ mgetPeriodRange = async function (instance, periodIds, yearDotMonth) {
       if (isUndefined(ranges[i][j])) {
         ranges[i][j] = {};
       }
-      ranges[i][j]['begin'] = data[idx][0]['begin'];
-      ranges[i][j]['end'] = data[idx][0]['end'];
+      if (data[idx] && data[idx][0]) {
+        ranges[i][j]['begin'] = data[idx][0]['begin'];
+        ranges[i][j]['end'] = data[idx][0]['end'];
+      }
       idx++;
     }
   }
@@ -1235,6 +1270,7 @@ mgetIterations = async function (instance, runIds, yearDotMonth) {
 
 // --------------------------------------------------------------------------------------------------------------
 getIterations = createGetFromMget(mgetIterations, 1);
+exports.mgetIterations = mgetIterations;
 exports.getIterations = getIterations;
 
 // --------------------------------------------------------------------------------------------------------------
@@ -1244,6 +1280,7 @@ mgetTags = async function (instance, runIds, yearDotMonth) {
 
 // --------------------------------------------------------------------------------------------------------------
 getTags = createGetFromMget(mgetTags, 1);
+exports.mgetTags = mgetTags;
 exports.getTags = getTags;
 
 // --------------------------------------------------------------------------------------------------------------
@@ -1376,6 +1413,151 @@ findYearDotMonthFromRun = async function (instance, runId) {
 exports.findYearDotMonthFromRun = findYearDotMonthFromRun;
 
 // --------------------------------------------------------------------------------------------------------------
+// DATE RANGE FUNCTIONS (for limiting index scope in searches)
+// --------------------------------------------------------------------------------------------------------------
+
+// Extract unique @YYYY.MM suffixes from the instance's known indices
+getAvailableMonths = function (instance) {
+  var months = new Set();
+  var ver = getCdmVer(instance);
+  if (ver == 'v7dev' || ver == 'v8dev') return [];
+  var indices = instance['indices'] && instance['indices'][ver] ? instance['indices'][ver] : [];
+  for (var i = 0; i < indices.length; i++) {
+    var match = indices[i].match(/@(\d{4}\.\d{2})$/);
+    if (match) months.add(match[1]);
+  }
+  return Array.from(months).sort();
+};
+exports.getAvailableMonths = getAvailableMonths;
+
+// Build a yearDotMonth pattern for a date range.
+// start/end are strings like "2025.01". Returns comma-separated suffixes
+// like "@2025.01,@2025.02,@2025.03" or "@*" if no range is specified.
+// The docType parameter is accepted for backward compatibility but ignored —
+// getIndexName expands each suffix with the correct baseName+docType.
+buildYearDotMonthRange = function (instance, docType, start, end) {
+  if (!start && !end) return '@*';
+  var ver = getCdmVer(instance);
+  if (ver == 'v7dev' || ver == 'v8dev') return '';
+
+  var available = getAvailableMonths(instance);
+  if (available.length === 0) return '@*';
+
+  var filtered = available.filter(function (m) {
+    if (start && m < start) return false;
+    if (end && m > end) return false;
+    return true;
+  });
+
+  // If no existing indices match the range, use the start month so the query
+  // targets a specific (non-existent) index and returns empty results, rather
+  // than falling back to @* which would query all months.
+  if (filtered.length === 0) return '@' + (start || end);
+
+  // For a single month, just return @YYYY.MM
+  if (filtered.length === 1) return '@' + filtered[0];
+
+  // For multiple months, return comma-separated suffixes.
+  // getIndexName will expand each one with baseName+docType.
+  return filtered.map(function (m) { return '@' + m; }).join(',');
+};
+exports.buildYearDotMonthRange = buildYearDotMonthRange;
+
+// --------------------------------------------------------------------------------------------------------------
+// DISTINCT FIELD VALUE FUNCTIONS (for search dropdowns)
+// These use aggregations to return unique values from OpenSearch indices.
+// --------------------------------------------------------------------------------------------------------------
+
+getDistinctNames = async function (instance, yearDotMonth) {
+  return await mSearch(instance, 'run', yearDotMonth, [], [], null, { source: { terms: { field: 'run.name', size: 10000 } } }, 0);
+};
+exports.getDistinctNames = getDistinctNames;
+
+// --------------------------------------------------------------------------------------------------------------
+getDistinctEmails = async function (instance, yearDotMonth) {
+  return await mSearch(instance, 'run', yearDotMonth, [], [], null, { source: { terms: { field: 'run.email', size: 10000 } } }, 0);
+};
+exports.getDistinctEmails = getDistinctEmails;
+
+// --------------------------------------------------------------------------------------------------------------
+getDistinctRunIds = async function (instance, yearDotMonth) {
+  return await mSearch(instance, 'run', yearDotMonth, [], [], null, { source: { terms: { field: 'run.run-uuid', size: 10000 } } }, 0);
+};
+exports.getDistinctRunIds = getDistinctRunIds;
+
+// --------------------------------------------------------------------------------------------------------------
+getDistinctBenchmarks = async function (instance, yearDotMonth) {
+  return await mSearch(instance, 'run', yearDotMonth, [], [], null, { source: { terms: { field: 'run.benchmark', size: 10000 } } }, 0);
+};
+exports.getDistinctBenchmarks = getDistinctBenchmarks;
+
+// --------------------------------------------------------------------------------------------------------------
+getDistinctTagNames = async function (instance, yearDotMonth) {
+  return await mSearch(instance, 'tag', yearDotMonth, [], [], null, { source: { terms: { field: 'tag.name', size: 10000 } } }, 0);
+};
+exports.getDistinctTagNames = getDistinctTagNames;
+
+// --------------------------------------------------------------------------------------------------------------
+getDistinctTagValues = async function (instance, yearDotMonth, tagName) {
+  var termKeys = tagName ? ['tag.name'] : [];
+  var values = tagName ? [[tagName]] : [];
+  return await mSearch(instance, 'tag', yearDotMonth, termKeys, values, null, { source: { terms: { field: 'tag.val', size: 10000 } } }, 0);
+};
+exports.getDistinctTagValues = getDistinctTagValues;
+
+// --------------------------------------------------------------------------------------------------------------
+getDistinctParamArgs = async function (instance, yearDotMonth) {
+  return await mSearch(instance, 'param', yearDotMonth, [], [], null, { source: { terms: { field: 'param.arg', size: 10000 } } }, 0);
+};
+exports.getDistinctParamArgs = getDistinctParamArgs;
+
+// --------------------------------------------------------------------------------------------------------------
+getDistinctParamValues = async function (instance, yearDotMonth, paramArg) {
+  var termKeys = paramArg ? ['param.arg'] : [];
+  var values = paramArg ? [[paramArg]] : [];
+  return await mSearch(instance, 'param', yearDotMonth, termKeys, values, null, { source: { terms: { field: 'param.val', size: 10000 } } }, 0);
+};
+exports.getDistinctParamValues = getDistinctParamValues;
+
+// --------------------------------------------------------------------------------------------------------------
+getDistinctPrimaryMetrics = async function (instance, yearDotMonth) {
+  return await mSearch(instance, 'iteration', yearDotMonth, [], [], null, { source: { terms: { field: 'iteration.primary-metric', size: 10000 } } }, 0);
+};
+exports.getDistinctPrimaryMetrics = getDistinctPrimaryMetrics;
+
+// --------------------------------------------------------------------------------------------------------------
+// RUN ID LOOKUP FUNCTIONS (for filtering runs by related entities)
+// These aggregate run.run-uuid from non-run indices to find which runs match a filter.
+// --------------------------------------------------------------------------------------------------------------
+
+getRunIdsByParam = async function (instance, yearDotMonth, paramArg, paramVal) {
+  return await mSearch(instance, 'param', yearDotMonth, ['param.arg', 'param.val'], [[paramArg], [paramVal]], null, { source: { terms: { field: 'run.run-uuid', size: 10000 } } }, 0);
+};
+exports.getRunIdsByParam = getRunIdsByParam;
+
+// --------------------------------------------------------------------------------------------------------------
+getRunIdsByTag = async function (instance, yearDotMonth, tagName, tagVal) {
+  var termKeys = [];
+  var values = [];
+  if (tagName) {
+    termKeys.push('tag.name');
+    values.push([tagName]);
+  }
+  if (tagVal) {
+    termKeys.push('tag.val');
+    values.push([tagVal]);
+  }
+  return await mSearch(instance, 'tag', yearDotMonth, termKeys, values, null, { source: { terms: { field: 'run.run-uuid', size: 10000 } } }, 0);
+};
+exports.getRunIdsByTag = getRunIdsByTag;
+
+// --------------------------------------------------------------------------------------------------------------
+getRunIdsByPrimaryMetric = async function (instance, yearDotMonth, primaryMetric) {
+  return await mSearch(instance, 'iteration', yearDotMonth, ['iteration.primary-metric'], [[primaryMetric]], null, { source: { terms: { field: 'run.run-uuid', size: 10000 } } }, 0);
+};
+exports.getRunIdsByPrimaryMetric = getRunIdsByPrimaryMetric;
+
+// --------------------------------------------------------------------------------------------------------------
 // INSTANCE DISCOVERY FUNCTIONS
 // --------------------------------------------------------------------------------------------------------------
 
@@ -1458,6 +1640,7 @@ mgetBenchmarkName = async function (instance, runIds, yearDotMonth) {
 
 // --------------------------------------------------------------------------------------------------------------
 getBenchmarkName = createGetFromMget(mgetBenchmarkName, 1, (r) => r[0][0]);
+exports.mgetBenchmarkName = mgetBenchmarkName;
 exports.getBenchmarkName = getBenchmarkName;
 
 // --------------------------------------------------------------------------------------------------------------
@@ -1467,6 +1650,7 @@ mgetRunData = async function (instance, runIds, yearDotMonth) {
 
 // --------------------------------------------------------------------------------------------------------------
 getRunData = createGetFromMget(mgetRunData, 1);
+exports.mgetRunData = mgetRunData;
 exports.getRunData = getRunData;
 
 // --------------------------------------------------------------------------------------------------------------

@@ -1,0 +1,427 @@
+import { useState, useMemo, useCallback } from 'react';
+import * as api from '../api/cdm';
+import { timeWork } from '../debugLog';
+
+function buildRunUrl(source) {
+  if (!source) return null;
+  // source format: "hostname//var/lib/crucible/run/<run-dir>"
+  // splitting on "//" gives ["hostname", "var/lib/crucible/run/<run-dir>"]
+  var parts = source.split('//');
+  if (parts.length < 2) return null;
+  var host = parts[0];
+  var path = '/' + parts.slice(1).join('//');
+  var runPath = path.replace(/^\/var\/lib\/crucible\/run\//, '/run/');
+  return 'http://' + host + ':8080' + runPath;
+}
+
+function formatDate(ts) {
+  if (!ts) return '-';
+  var d = new Date(Number(ts));
+  return d.toLocaleDateString() + ' ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+
+function formatMetric(pm) {
+  if (!pm) return '-';
+  if (typeof pm === 'string') return pm;
+  const source = pm.source || '';
+  const type = pm.type || '';
+  return [source, type].filter(Boolean).join('::') || '-';
+}
+
+function formatValue(v) {
+  if (v == null) return '';
+  if (Math.abs(v) >= 1000) return v.toFixed(0);
+  if (Math.abs(v) >= 1) return v.toFixed(2);
+  return v.toPrecision(3);
+}
+
+export default function IterationTable({ iterations, selected, onToggleSelect, onToggleSelectAll, loading, onAddTagFilter, onAddParamFilter }) {
+  const [sortKey, setSortKey] = useState(null);
+  const [sortDir, setSortDir] = useState('asc');
+  const [paramFilter, setParamFilter] = useState('');
+  const [metricValues, setMetricValues] = useState({}); // { iterationId: { mean, stddevPct, sampleValues } }
+  const [metricLoading, setMetricLoading] = useState(false);
+
+  const fetchMetricValues = useCallback(async () => {
+    if (iterations.length === 0) return;
+    setMetricLoading(true);
+    try {
+      // Collect unique run IDs and date range from iterations
+      var runIdSet = new Set();
+      iterations.forEach(function (it) { runIdSet.add(it.runId); });
+      var runIds = Array.from(runIdSet);
+      // Infer start/end from run dates
+      var starts = iterations.filter(function (it) { return it.runBegin; }).map(function (it) { return it.runBegin; });
+      var minBegin = starts.length > 0 ? Math.min.apply(null, starts) : null;
+      var maxBegin = starts.length > 0 ? Math.max.apply(null, starts) : null;
+      var startMonth = minBegin ? new Date(Number(minBegin)) : null;
+      var endMonth = maxBegin ? new Date(Number(maxBegin)) : null;
+      var start = startMonth ? startMonth.getFullYear() + '.' + String(startMonth.getMonth() + 1).padStart(2, '0') : null;
+      var end = endMonth ? endMonth.getFullYear() + '.' + String(endMonth.getMonth() + 1).padStart(2, '0') : null;
+
+      var res = await timeWork('Fetch metric values for ' + iterations.length + ' iteration(s)', function () {
+        return api.getIterationMetricValues(runIds, start, end);
+      });
+      setMetricValues(res.values || {});
+    } catch (err) {
+      console.error('Failed to fetch metric values:', err);
+    } finally {
+      setMetricLoading(false);
+    }
+  }, [iterations]);
+
+  const handleSort = (key) => {
+    if (sortKey === key) {
+      setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
+    } else {
+      setSortKey(key);
+      setSortDir('asc');
+    }
+  };
+
+  const filtered = useMemo(() => {
+    if (!paramFilter) return iterations;
+    const q = paramFilter.toLowerCase();
+    // Support "arg=val" syntax: split on first "=" and match both sides
+    const eqIdx = q.indexOf('=');
+    if (eqIdx >= 0) {
+      const argQ = q.substring(0, eqIdx);
+      const valQ = q.substring(eqIdx + 1);
+      return iterations.filter((it) =>
+        it.params.some(
+          (p) =>
+            (!argQ || (p.arg && p.arg.toLowerCase().includes(argQ))) &&
+            (!valQ || (p.val && String(p.val).toLowerCase().includes(valQ))),
+        ),
+      );
+    }
+    return iterations.filter((it) =>
+      it.params.some(
+        (p) =>
+          (p.arg && p.arg.toLowerCase().includes(q)) ||
+          (p.val && String(p.val).toLowerCase().includes(q)),
+      ),
+    );
+  }, [iterations, paramFilter]);
+
+  const sorted = useMemo(() => {
+    if (!sortKey) return filtered;
+    const arr = [...filtered];
+    arr.sort((a, b) => {
+      let va, vb;
+      switch (sortKey) {
+        case 'benchmark':
+          va = a.benchmark || '';
+          vb = b.benchmark || '';
+          break;
+        case 'samples':
+          va = a.sampleCount;
+          vb = b.sampleCount;
+          break;
+        case 'status':
+          va = a.passCount;
+          vb = b.passCount;
+          break;
+        case 'metric':
+          va = (metricValues[a.iterationId] && metricValues[a.iterationId].mean) || 0;
+          vb = (metricValues[b.iterationId] && metricValues[b.iterationId].mean) || 0;
+          break;
+        case 'run':
+          va = a.runId;
+          vb = b.runId;
+          break;
+        case 'date':
+          va = a.runBegin || 0;
+          vb = b.runBegin || 0;
+          break;
+        default:
+          return 0;
+      }
+      if (va < vb) return sortDir === 'asc' ? -1 : 1;
+      if (va > vb) return sortDir === 'asc' ? 1 : -1;
+      return 0;
+    });
+    return arr;
+  }, [filtered, sortKey, sortDir, metricValues]);
+
+  const thClass = (key) => {
+    if (sortKey !== key) return '';
+    return sortDir === 'asc' ? 'sorted-asc' : 'sorted-desc';
+  };
+
+  const allOnPageSelected = sorted.length > 0 && sorted.every((it) => selected.has(it.iterationId));
+
+  // Precompute run group parity and rowSpan info
+  const { runGroupParity, runGroupSpan } = useMemo(() => {
+    var parity = [];
+    var span = []; // null = skip cell, number = rowSpan for this cell
+    var current = 0;
+    var groupStart = 0;
+    for (var i = 0; i < sorted.length; i++) {
+      if (i > 0 && sorted[i].runId !== sorted[i - 1].runId) {
+        current = 1 - current;
+        // Set the span for the group that just ended
+        span[groupStart] = i - groupStart;
+        groupStart = i;
+      }
+      parity.push(current);
+      span.push(null);
+    }
+    // Final group
+    if (sorted.length > 0) {
+      span[groupStart] = sorted.length - groupStart;
+    }
+    return { runGroupParity: parity, runGroupSpan: span };
+  }, [sorted]);
+
+  // Compute globally varying vs common params and tags across all displayed iterations
+  const { globalVarying, commonList } = useMemo(() => {
+    var paramValues = {};
+    var tagValues = {};
+    var benchmarks = new Set();
+    for (var i = 0; i < iterations.length; i++) {
+      var it = iterations[i];
+      if (it.benchmark) benchmarks.add(it.benchmark);
+      (it.params || []).forEach(function (p) {
+        if (!paramValues[p.arg]) paramValues[p.arg] = new Set();
+        paramValues[p.arg].add(String(p.val));
+      });
+      (it.tags || []).forEach(function (t) {
+        if (!tagValues[t.name]) tagValues[t.name] = new Set();
+        tagValues[t.name].add(t.val);
+      });
+    }
+    var benchmarkVaries = benchmarks.size > 1;
+    var varyingArgs = new Set();
+    Object.keys(paramValues).forEach(function (arg) {
+      if (paramValues[arg].size > 1) varyingArgs.add(arg);
+    });
+    var varyingTags = new Set();
+    Object.keys(tagValues).forEach(function (name) {
+      if (tagValues[name].size > 1) varyingTags.add(name);
+    });
+    // Build per-iteration lists
+    var varying = {};
+    var common = {};
+    for (var i = 0; i < iterations.length; i++) {
+      var it = iterations[i];
+      var v = [];
+      var c = [];
+      // Benchmark
+      if (benchmarkVaries) {
+        v.unshift({ key: 'benchmark', val: it.benchmark || '', type: 'benchmark' });
+      } else {
+        c.unshift({ key: 'benchmark', val: it.benchmark || '', type: 'benchmark' });
+      }
+      (it.params || []).forEach(function (p) {
+        if (varyingArgs.has(p.arg)) v.push({ key: p.arg, val: p.val, type: 'param' });
+        else c.push({ key: p.arg, val: p.val, type: 'param' });
+      });
+      (it.tags || []).forEach(function (t) {
+        if (varyingTags.has(t.name)) v.push({ key: t.name, val: t.val, type: 'tag' });
+        else c.push({ key: t.name, val: t.val, type: 'tag' });
+      });
+      varying[it.iterationId] = v;
+      common[it.iterationId] = c;
+    }
+    var commonList = iterations.length > 0 ? (common[iterations[0].iterationId] || []) : [];
+    return { globalVarying: varying, commonList: commonList };
+  }, [iterations]);
+
+  return (
+    <div className="results-panel">
+      <div className="results-header">
+        <h2>Iterations {iterations.length > 0 && `(${iterations.length})`}</h2>
+        {iterations.length > 0 && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <button
+              className="btn btn-sm btn-secondary"
+              onClick={fetchMetricValues}
+              disabled={metricLoading || iterations.length === 0}
+            >
+              {metricLoading ? (
+                <><span className="spinner" style={{ marginRight: 4 }} /> Loading...</>
+              ) : Object.keys(metricValues).length > 0 ? 'Refresh Values' : 'Show Values'}
+            </button>
+            <div className="field" style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+              <label style={{ textTransform: 'none', letterSpacing: 0 }}>Filter params:</label>
+              <input
+                type="text"
+                placeholder="e.g. bs=4k"
+                value={paramFilter}
+                onChange={(e) => setParamFilter(e.target.value)}
+                style={{ width: 160 }}
+              />
+            </div>
+          </div>
+        )}
+      </div>
+      {commonList.length > 0 && (
+        <div className="results-common">
+          <span className="results-common-label">Common:</span>
+          {commonList.map(function (p, i) {
+            return (
+              <span key={i} className={p.type === 'benchmark' ? 'benchmark-badge' : p.type === 'tag' ? 'tag' : 'param param-common'}>
+                {p.type === 'tag' && <span className="tag-key">{p.key}</span>}
+                {p.type === 'tag' ? '=' + p.val : p.type === 'benchmark' ? p.val : p.key + '=' + p.val}
+              </span>
+            );
+          })}
+        </div>
+      )}
+      <div className="results-table-wrap">
+        <table className="results-table">
+          <thead>
+            <tr>
+              <th className={thClass('run')} onClick={() => handleSort('run')}>
+                Run
+                {sorted.length > 0 && <div className="column-hint">select iterations then click <span className="hint-button">Compare</span> above to graph</div>}
+              </th>
+              <th>
+                <input
+                  type="checkbox"
+                  checked={allOnPageSelected}
+                  onChange={() => onToggleSelectAll(sorted)}
+                  disabled={sorted.length === 0}
+                />
+              </th>
+              <th>
+                Unique <span className="benchmark-badge" style={{fontSize:9,verticalAlign:'middle'}}>bench</span> <span className="tag" style={{fontSize:9,verticalAlign:'middle'}}>tag</span> <span className="param" style={{fontSize:9,verticalAlign:'middle'}}>param</span>
+                {sorted.length > 0 && <div className="column-hint">click any box below to add filter, then click <span className="hint-button">Search</span> to apply</div>}
+              </th>
+              <th className={thClass('metric')} onClick={() => handleSort('metric')}>
+                Primary Metric
+              </th>
+              <th className={thClass('samples')} onClick={() => handleSort('samples')}>
+                Samples
+              </th>
+              <th className={thClass('status')} onClick={() => handleSort('status')}>
+                Status
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            {loading && (
+              <tr className="loading-row">
+                <td colSpan={6}>
+                  <span className="spinner" /> Loading iterations...
+                </td>
+              </tr>
+            )}
+            {!loading && sorted.length === 0 && iterations.length === 0 && (
+              <tr className="loading-row">
+                <td colSpan={6}>
+                  <div className="workflow-guide">
+                    <div className="workflow-title">Getting Started</div>
+                    <div className="workflow-steps">
+                      <div className="workflow-step">
+                        <span className="workflow-num">1</span>
+                        <span>Set a <b>date range</b> and optionally filter by benchmark, tags, params, or user above</span>
+                      </div>
+                      <div className="workflow-step">
+                        <span className="workflow-num">2</span>
+                        <span>Click <b>Search</b> to find matching iterations</span>
+                      </div>
+                      <div className="workflow-step">
+                        <span className="workflow-num">3</span>
+                        <span>Click values in the <b>Unique</b> column to refine your filters, then search again</span>
+                      </div>
+                      <div className="workflow-step">
+                        <span className="workflow-num">4</span>
+                        <span>Select iterations with <b>checkboxes</b>, then click <b>Compare</b> to see bar charts</span>
+                      </div>
+                    </div>
+                  </div>
+                </td>
+              </tr>
+            )}
+            {!loading && sorted.length === 0 && iterations.length > 0 && (
+              <tr className="loading-row">
+                <td colSpan={6}>
+                  <span className="empty-msg">No iterations match the current filter.</span>
+                </td>
+              </tr>
+            )}
+            {!loading &&
+              sorted.map((it, idx) => {
+                var rowClasses = [];
+                if (selected.has(it.iterationId)) rowClasses.push('selected');
+                rowClasses.push(runGroupParity[idx] === 0 ? 'run-group-even' : 'run-group-odd');
+                if (idx > 0 && it.runId !== sorted[idx - 1].runId) rowClasses.push('run-group-border');
+                return (
+                <tr
+                  key={it.iterationId}
+                  className={rowClasses.join(' ')}
+                  onClick={() => onToggleSelect(it)}
+                  style={{ cursor: 'pointer' }}
+                >
+                  {runGroupSpan[idx] != null && (
+                    <td rowSpan={runGroupSpan[idx]} className="run-id-cell" onClick={(e) => e.stopPropagation()}>
+                      {buildRunUrl(it.runSource) ? (
+                        <a className="run-id" href={buildRunUrl(it.runSource)} target="_blank" rel="noopener noreferrer">{it.runId}</a>
+                      ) : (
+                        <span className="run-id">{it.runId}</span>
+                      )}
+                      <div className="run-date">{formatDate(it.runBegin)}</div>
+                      <div style={{ marginTop: 4 }}>
+                        <input
+                          type="checkbox"
+                          checked={sorted.slice(idx, idx + runGroupSpan[idx]).every(function (r) { return selected.has(r.iterationId); })}
+                          onChange={function () { onToggleSelectAll(sorted.slice(idx, idx + runGroupSpan[idx])); }}
+                          title="Select all iterations in this run"
+                        />
+                      </div>
+                    </td>
+                  )}
+                  <td onClick={(e) => e.stopPropagation()}>
+                    <input
+                      type="checkbox"
+                      checked={selected.has(it.iterationId)}
+                      onChange={() => onToggleSelect(it)}
+                    />
+                  </td>
+                  <td>
+                    {(globalVarying[it.iterationId] || []).length > 0
+                      ? (globalVarying[it.iterationId] || []).map((p, i) => (
+                          <span key={i}
+                            className={(p.type === 'benchmark' ? 'benchmark-badge' : p.type === 'tag' ? 'tag' : 'param') + (p.type !== 'benchmark' ? ' clickable-filter' : '')}
+                            title={p.type !== 'benchmark' ? 'Click to filter by ' + p.key + '=' + p.val : p.val}
+                            onClick={function (e) {
+                              e.stopPropagation();
+                              if (p.type === 'tag' && onAddTagFilter) onAddTagFilter(p.key, p.val);
+                              else if (p.type === 'param' && onAddParamFilter) onAddParamFilter(p.key, p.val);
+                            }}
+                          >
+                            {p.type === 'tag' && <span className="tag-key">{p.key}</span>}
+                            {p.type === 'tag' ? '=' + p.val : p.type === 'benchmark' ? p.val : p.key + '=' + p.val}
+                          </span>
+                        ))
+                      : '-'}
+                  </td>
+                  <td className="metric-value">
+                    {formatMetric(it.primaryMetric)}
+                    {metricValues[it.iterationId] && metricValues[it.iterationId].mean != null && (
+                      <span className="metric-number">
+                        {' '}{formatValue(metricValues[it.iterationId].mean)}
+                        {metricValues[it.iterationId].stddevPct != null && metricValues[it.iterationId].sampleValues.length > 1 && (
+                          <span className="metric-stddev"> ({metricValues[it.iterationId].stddevPct.toFixed(1)}%)</span>
+                        )}
+                      </span>
+                    )}
+                  </td>
+                  <td>{it.sampleCount}</td>
+                  <td>
+                    {it.passCount > 0 && <span className="status-pass">{it.passCount}P</span>}
+                    {it.passCount > 0 && it.failCount > 0 && ' '}
+                    {it.failCount > 0 && <span className="status-fail">{it.failCount}F</span>}
+                    {it.passCount === 0 && it.failCount === 0 && '-'}
+                  </td>
+                </tr>
+                );
+              })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
