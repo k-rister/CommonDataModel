@@ -1290,7 +1290,9 @@ export default function CompareView({ selected, groupByList, setGroupByList, hid
           );
         }
 
-        var chartHeight = Math.max(400, nonGapData.length * 30 + 150);
+        // Cap chart height at 50% of viewport width to prevent overly tall charts
+        var maxHeight = Math.floor(window.innerWidth * 0.3);
+        var chartHeight = Math.min(Math.max(300, nonGapData.length * 30 + 150), maxHeight);
         var hasOverlays = supplementalMetrics.some(function (m) { return m.display !== 'panel'; });
 
         return (
@@ -1386,7 +1388,15 @@ export default function CompareView({ selected, groupByList, setGroupByList, hid
                                 <Bar key={lk} dataKey={lk} yAxisId="left"
                                   radius={ct === 'stacked' ? [0, 0, 0, 0] : [3, 3, 0, 0]}
                                   stackId={ct === 'stacked' ? 'stack' : undefined}
-                                  name={labelName}>
+                                  name={labelName} style={{ cursor: 'pointer' }}
+                                  onClick={function (data) {
+                                    if (data && !data.isGap) {
+                                      setPinnedEntry(function (prev) {
+                                        if (prev && prev.entry && prev.entry.iterationId === data.iterationId) return null;
+                                        return { entry: data, metricName: chart.metricName };
+                                      });
+                                    }
+                                  }}>
                                   <LabelList dataKey={lk} content={function (props) {
                                     if (ct === 'stacked') {
                                       // For stacked: check both width and individual segment height
@@ -1426,7 +1436,16 @@ export default function CompareView({ selected, groupByList, setGroupByList, hid
                         }
                         // No breakouts — single bar
                         return (
-                          <Bar dataKey={dataKey} yAxisId="left" radius={[3, 3, 0, 0]}>
+                          <Bar dataKey={dataKey} yAxisId="left" radius={[3, 3, 0, 0]} style={{ cursor: 'pointer' }}
+                            onClick={function (data) {
+                              if (data && !data.isGap) {
+                                setPinnedEntry(function (prev) {
+                                  if (prev && prev.entry && prev.entry.iterationId === data.iterationId) return null;
+                                  return { entry: data, metricName: chart.metricName };
+                                });
+                              }
+                            }}
+                          >
                             <ErrorBar dataKey={dataKey + '_error'} width={4} strokeWidth={2} stroke="var(--text-secondary)" />
                             <LabelList dataKey={dataKey} content={function (props) {
                               var val4 = props.value;
@@ -1795,7 +1814,15 @@ export default function CompareView({ selected, groupByList, setGroupByList, hid
                                 <Bar key={lk} dataKey={lk} yAxisId="left"
                                   radius={ct === 'stacked' ? [0, 0, 0, 0] : [3, 3, 0, 0]}
                                   stackId={ct === 'stacked' ? 'stack' : undefined}
-                                  name={labelName}>
+                                  name={labelName} style={{ cursor: 'pointer' }}
+                                  onClick={function (data) {
+                                    if (data && !data.isGap) {
+                                      setPinnedEntry(function (prev) {
+                                        if (prev && prev.entry && prev.entry.iterationId === data.iterationId) return null;
+                                        return { entry: data, metricName: chart.metricName };
+                                      });
+                                    }
+                                  }}>
                                   <LabelList dataKey={lk} content={function (props) {
                                     if (ct === 'stacked') {
                                       // For stacked: check both width and individual segment height
@@ -1834,7 +1861,16 @@ export default function CompareView({ selected, groupByList, setGroupByList, hid
                           }
                         }
                         return (
-                          <Bar dataKey={dataKey} yAxisId="left" radius={[3, 3, 0, 0]}>
+                          <Bar dataKey={dataKey} yAxisId="left" radius={[3, 3, 0, 0]} style={{ cursor: 'pointer' }}
+                            onClick={function (data) {
+                              if (data && !data.isGap) {
+                                setPinnedEntry(function (prev) {
+                                  if (prev && prev.entry && prev.entry.iterationId === data.iterationId) return null;
+                                  return { entry: data, metricName: chart.metricName };
+                                });
+                              }
+                            }}
+                          >
                             <ErrorBar dataKey={dataKey + '_error'} width={4} strokeWidth={2} stroke="var(--text-secondary)" />
                             <LabelList dataKey={dataKey} content={function (props) {
                               var val4 = props.value;
