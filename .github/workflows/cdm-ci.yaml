@@ -26,6 +26,7 @@ jobs:
             .github/rulesets/**
             .github/workflows/run-crucible-tracking.yaml
             .github/workflows/crucible-ci.yaml
+            .github/workflows/controller-build.yaml
             .github/workflows/cdm-ci.yaml
             docs/**
       - name: Display changes
