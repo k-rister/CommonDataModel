@@ -34,7 +34,8 @@ queries/cdmq/
 ├── server.js               # Express HTTP server (REST API + static file serving)
 ├── start-server.sh         # Startup script (npm install, web-ui build, launch)
 ├── web-ui/                 # React application (this project)
-│   ├── ARCHITECTURE.md     # This file
+│   ├── ARCHITECTURE.md     # This file (initial architecture overview)
+│   ├── DESIGN.md           # Comprehensive design & implementation guide
 │   ├── vite.config.js      # Vite configuration (proxy, build output)
 │   ├── index.html          # HTML entry point
 │   ├── package.json        # Dependencies (react, recharts, vite)
@@ -46,9 +47,11 @@ queries/cdmq/
 │   │   ├── api/
 │   │   │   └── cdm.js      # API client (fetch wrappers for all CDM endpoints)
 │   │   └── components/
-│   │       ├── SearchPanel.jsx     # Phase 1: Search form and iteration loading
-│   │       ├── IterationTable.jsx  # Phase 1: Results table with sorting/filtering
-│   │       ├── SelectionBar.jsx    # Phase 1: Persistent selection display
+│   │       ├── SearchPanel.jsx     # Search form with autocomplete filters
+│   │       ├── IterationTable.jsx  # Results table with sorting/filtering
+│   │       ├── SelectionBar.jsx    # Persistent selection display
+│   │       ├── CompareView.jsx     # Bar charts with grouping, metrics, breakouts
+│   │       ├── AutocompleteInput.jsx # Reusable dropdown (single/multi-select)
 │   │       └── DebugConsole.jsx    # Timing/debug console panel
 │   └── dist/               # Build output (served by Express in production)
 ```
@@ -336,23 +339,20 @@ crucible start opensearch   # Starts OpenSearch + CDM server (builds web UI)
 # Open http://<host>:3000
 ```
 
-## Future Phases
+## Implementation Status
 
-### Phase 2: Result Summary (Comparison Bar Charts)
+### Phase 1: Search & Selection — Implemented
+See sections above and [DESIGN.md](DESIGN.md) for full details.
 
-Compare primary metrics across selected iterations using bar charts:
-- Clustering by param value, run, or tag
-- Supplemental metrics as side-by-side bars or overlay dots
-- Recharts BarChart component
+### Phase 2: Compare — Implemented
+Bar chart comparison with hierarchical group-by headers, supplemental metrics (overlay + panel modes), breakouts with filter/sample selection, click-to-pin with reference lines, URL state sharing. See [DESIGN.md](DESIGN.md) for full details.
 
-### Phase 3: Deep Dive (Time-Series Line Charts)
+### Phase 3: Deep Dive (Time-Series Line Charts) — Planned
 
 Interactive time-series exploration:
 - Line charts with zoom/pan
-- Right-click context menu for breakout exploration
-- Per-line breakout state (different lines can have different breakout depths)
+- Breakout exploration
 - Iteration overlay with relative time alignment
-- Recharts or Plotly for advanced interactivity
 
 ## Design Decisions & Rationale
 
@@ -369,13 +369,13 @@ Eliminates CORS configuration, simplifies deployment (one container, one
 port), and means the UI is automatically available wherever the CDM API runs.
 No separate web server or reverse proxy needed.
 
-### Why `<datalist>` instead of a select dropdown library?
+### Why a custom AutocompleteInput instead of a select library?
 
-Native `<datalist>` provides autocomplete from known values while still
-allowing free text input. This is important because:
-- Users may want to type a value not yet in the system
-- No additional React library dependency
-- Works with the existing input styling
+`AutocompleteInput.jsx` replaces native `<datalist>` elements with a custom
+dropdown that supports multi-select (chips), context-aware partitioning
+(present vs. absent values based on current search results), and keyboard
+navigation. This avoids third-party React dropdown dependencies while
+providing the UX needed for multi-value tag/param filtering.
 
 ### Why client-side iteration filtering after server-side run filtering?
 

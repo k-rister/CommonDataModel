@@ -85,7 +85,8 @@ App
 | `iterations` (search results) | App | SearchPanel (as prop), IterationTable |
 | `selected` (Map of iterationId -> iteration) | App | IterationTable, SelectionBar, CompareView |
 | `view` (search/compare/deepdive) | App | Controls which view renders |
-| `groupBy`, `seriesBy` | App | CompareView |
+| `groupByList` | App | CompareView |
+| `hiddenFields` | App | CompareView |
 | `filters` (search form state) | SearchPanel | Internal; exposed via ref |
 | `metricValues` (primary metric) | IterationTable | Internal (fetched on demand) |
 | `supplementalMetrics` | CompareView | Internal |
@@ -249,7 +250,7 @@ The text input at the top filters iterations by param name/value:
 
 ### Chart Architecture
 
-The chart uses Recharts' `ComposedChart` which supports mixing Bar and Line components. The chart data is a flat array of entries, one per iteration, with gap entries inserted between groups.
+The chart uses Recharts' `ComposedChart` which supports mixing Bar and Line components. The chart data is a flat array of entries, one per iteration, with gap entries inserted between groups. Chart height is capped at 30% of viewport width to prevent overly tall charts.
 
 **Chart data entry structure:**
 ```javascript
@@ -336,18 +337,21 @@ Users can hide specific params/tags from the compare view:
 4. Choose display mode: **Overlay** (line on primary chart with right Y-axis) or **Own Panel** (separate bar chart)
 5. Click "Add" — fetches metric values for all selected iterations
 
-### Metric Control Panel
+### Primary Metric Refinement
 
-Each added metric is displayed as a row with:
+The primary metric chart includes a "Refine" button that adds the primary metric as a supplemental metric panel. This gives the primary metric the same controls as supplemental metrics: breakouts, filters, sample selection, and chart type. Once refined, the button disappears to prevent duplicates.
+
+### Metric Control Row
+
+Each metric's controls render directly below its chart panel (not grouped at the top). Controls include:
 - Colored left border (consistent color across chart and panel)
-- Metric name (source::type) in monospace font
-- Display mode badge ("overlay" or "panel")
 - **+ Breakout** dropdown (populated with `remainingBreakouts` from server)
 - **Chart type** selector (Bars, Stacked, Lines) — visible when breakouts are active
 - **Sample** selector — choose which sample to display (auto-selects the sample closest to the primary metric mean)
 - **Filter** input — accepts `gt:N`, `ge:N`, `lt:N`, `le:N` syntax for server-side label filtering
 - Remove button (x)
 - Active breakout chips with editable filter values
+- Overlay-mode metric controls render below the primary chart
 
 ### Per-Sample Selection
 
@@ -485,25 +489,41 @@ http://host:3000/#%7B%22benchmark%22%3A%22uperf%22%2C%22start%22%3A%222026.01%22
   params: [{ arg: "wsize", val: "64,256" }],
   selectedRuns: ["uuid1", "uuid2"],  // Run IDs (not iteration IDs — much shorter)
   view: "compare",
-  groupBy: ["param:nthreads", "param:protocol"]  // Array of group-by dimensions
+  groupBy: ["param:nthreads", "param:protocol"],  // Array of group-by dimensions
+  hidden: ["param:primary-metric"],  // Hidden field dimensions
+  metrics: [                   // Supplemental metrics with full configuration
+    {
+      source: "mpstat",
+      type: "Busy-CPU",
+      display: "panel",
+      chartType: "bar",        // Omitted if "bar" (default)
+      breakouts: ["direction"],
+      filter: "gt:0",
+      sampleIndex: 2
+    }
+  ]
 }
 ```
 
 ### Restoration Flow
 
 1. On mount: `decodeState(window.location.hash)` parsed, stored in `restoredState.current`
-2. `groupByList` set immediately (handles both array and legacy single-string format)
-3. `view` NOT set yet (deferred until search completes)
-4. After SearchPanel mounts: `setFiltersAndSearch(filters)` called via ref
-5. SearchPanel updates filters, triggers search via `pendingSearch` ref + useEffect
-6. `handleSearchResults` receives results, auto-selects iterations from matching run IDs
-7. View switched to saved view (e.g., "compare")
-8. `restoredState.current` cleared to prevent re-application on next search
-9. If no groupByList was saved, auto-group runs on CompareView mount
+2. `groupByList` and `hiddenFields` set immediately (handles both array and legacy single-string format)
+3. `restoredMetrics` saved to React state (not ref) so it survives timing between mount and CompareView render
+4. `view` NOT set yet (deferred until search completes)
+5. After SearchPanel mounts: `setFiltersAndSearch(filters)` called via ref
+6. SearchPanel updates filters, triggers search via `pendingSearch` ref + useEffect
+7. `handleSearchResults` receives results, auto-selects iterations from matching run IDs
+8. View switched to saved view (e.g., "compare")
+9. `restoredState.current` cleared to prevent re-application on next search
+10. CompareView mounts and detects `restoredMetrics` prop — re-fetches each metric with saved configuration (source, type, display, chartType, breakouts, filter, sampleIndex)
+11. If no groupByList was saved, auto-group runs on CompareView mount
 
-**Key design decision:** View switch is deferred until after search + selection to avoid showing an empty Compare view while data is loading.
-
-**Filters are saved in `lastFilters.current`** on every search result, because SearchPanel is unmounted when the user navigates to Compare view. The Share button uses `searchRef.current.getFilters() || lastFilters.current`.
+**Key design decisions:**
+- View switch is deferred until after search + selection to avoid showing an empty Compare view while data is loading.
+- `restoredMetrics` uses React state (not a ref) because the ref would be cleared before CompareView mounts and reads it.
+- Filters are saved in `lastFilters.current` on every search result, because SearchPanel is unmounted when the user navigates to Compare view. The Share button uses `searchRef.current.getFilters() || lastFilters.current`.
+- Supplemental metrics are retrieved from CompareView via `compareRef.current.getSupplementalMetrics()` (exposed via `useImperativeHandle`).
 
 ---
 
@@ -661,11 +681,9 @@ Primary metric values are NOT loaded with iteration details (would add ~7 second
 - **Large result sets:** Searching across many months with hundreds of runs can be slow due to sequential OpenSearch queries
 - **Bundle size:** Recharts adds ~400KB to the bundle. Code splitting could help.
 - **Breakout label parsing:** CDM may omit breakout dimensions with single values from labels, making label-to-dimension mapping imperfect. The sidebar uses segment-based grouping to work around this.
-- **Supplemental metric in URL state:** Currently supplemental metrics, breakouts, and hidden fields are not encoded in the Share URL
 
 ### Planned Features
 
 - **Deep Dive view:** Time-series line charts with zoom/pan and interactive breakout exploration
 - **Save/load workflows:** Server-side or localStorage persistence of named workflows
-- **Supplemental metrics in URL state:** Encode added metrics, breakouts, and display modes in the Share URL
 - **Drag-to-reorder:** Group-by chips currently use arrow buttons; drag-and-drop would be more intuitive
