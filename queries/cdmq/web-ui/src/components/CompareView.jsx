@@ -504,6 +504,22 @@ const CompareView = forwardRef(function CompareView({ selected, groupByList, set
   var [addMetricDisplay, setAddMetricDisplay] = useState('panel'); // 'overlay' or 'panel'
   var [showAddMetric, setShowAddMetric] = useState(false);
   var [pinnedEntry, setPinnedEntry] = useState(null);
+  var [breakoutValueCache, setBreakoutValueCache] = useState({}); // { "source::type": { "hostname": ["h1","h2"], ... } }
+  var [openBreakoutDropdown, setOpenBreakoutDropdown] = useState(null); // index of metric with open dropdown
+  var [breakoutSelections, setBreakoutSelections] = useState({}); // { "dimName": Set of selected values }
+  var breakoutDropdownRef = useRef(null);
+
+  // Close breakout dropdown on outside click
+  useEffect(function () {
+    if (openBreakoutDropdown == null) return;
+    function handleClick(e) {
+      if (breakoutDropdownRef.current && !breakoutDropdownRef.current.contains(e.target)) {
+        setOpenBreakoutDropdown(null);
+      }
+    }
+    document.addEventListener('mousedown', handleClick);
+    return function () { document.removeEventListener('mousedown', handleClick); };
+  }, [openBreakoutDropdown]);
 
   var iterations = useMemo(function () {
     return Array.from(selected.values());
@@ -699,6 +715,26 @@ const CompareView = forwardRef(function CompareView({ selected, groupByList, set
       setAddMetricLoading(false);
     });
   }, [iterations, addMetricSource, addMetricType, addMetricDisplay, supplementalMetrics]);
+
+  // Fetch breakout distinct values for a metric's remaining breakouts (lazy, cached)
+  function fetchBreakoutValues(source, type, breakoutNames) {
+    var cacheKey = source + '::' + type;
+    if (breakoutValueCache[cacheKey]) return; // already fetched
+    if (!breakoutNames || breakoutNames.length === 0) return;
+    var ctx = getRunContext();
+    api.getBreakoutValues({
+      runIds: ctx.runIds, start: ctx.start, end: ctx.end,
+      source: source, type: type, breakouts: breakoutNames,
+    }).then(function (res) {
+      setBreakoutValueCache(function (prev) {
+        var next = Object.assign({}, prev);
+        next[cacheKey] = res.breakouts || {};
+        return next;
+      });
+    }).catch(function (err) {
+      console.error('Failed to fetch breakout values:', err);
+    });
+  }
 
   var handleAddBreakout = useCallback(function (si, breakoutName) {
     var sm = supplementalMetrics[si];
@@ -1098,12 +1134,90 @@ const CompareView = forwardRef(function CompareView({ selected, groupByList, set
       <div key={'ctrl-' + si} className="compare-metric-row" style={{ borderLeftColor: color }}>
         <div className="compare-metric-row-header">
           {sm.loading && <span className="spinner" style={{ marginLeft: 8 }} />}
-          {!sm.loading && sm.remainingBreakouts && sm.remainingBreakouts.length > 0 && (
-            <select className="compare-breakout-select" value="" onChange={function (e) { if (e.target.value) handleAddBreakout(si, e.target.value); }}>
-              <option value="">+ Breakout</option>
-              {sm.remainingBreakouts.map(function (b) { return <option key={b} value={b}>{b}</option>; })}
-            </select>
-          )}
+          {!sm.loading && sm.remainingBreakouts && sm.remainingBreakouts.length > 0 && (function () {
+            var cacheKey = sm.source + '::' + sm.type;
+            var bvCache = breakoutValueCache[cacheKey] || {};
+            var isOpen = openBreakoutDropdown === si;
+            // Sort: multi-value breakouts first, single-value last; alphabetical within each group
+            var sortedBreakouts = sm.remainingBreakouts.slice().sort(function (a, b) {
+              var ca = bvCache[a] ? bvCache[a].length : -1;
+              var cb = bvCache[b] ? bvCache[b].length : -1;
+              var aMulti = ca === -1 || ca > 1 ? 1 : 0;
+              var bMulti = cb === -1 || cb > 1 ? 1 : 0;
+              if (aMulti !== bMulti) return bMulti - aMulti;
+              if (a < b) return -1;
+              if (a > b) return 1;
+              return 0;
+            });
+            return (
+              <div className="breakout-dropdown-wrap" ref={isOpen ? breakoutDropdownRef : undefined}>
+                <button className="btn btn-sm btn-secondary breakout-dropdown-trigger" onClick={function () {
+                  if (isOpen) {
+                    setOpenBreakoutDropdown(null);
+                    setBreakoutSelections({});
+                  } else {
+                    setOpenBreakoutDropdown(si);
+                    setBreakoutSelections({});
+                    fetchBreakoutValues(sm.source, sm.type, sm.remainingBreakouts);
+                  }
+                }}>+ Breakout</button>
+                {isOpen && (
+                  <div className="breakout-dropdown-menu">
+                    {sortedBreakouts.map(function (b) {
+                      var vals = bvCache[b];
+                      var count = vals ? vals.length : null;
+                      var isSingle = count === 1;
+                      var selected_vals = breakoutSelections[b]; // Set or undefined
+                      var hasSelection = selected_vals && selected_vals.size > 0;
+                      var allSelected = hasSelection && vals && selected_vals.size === vals.length;
+                      return (
+                        <div key={b} className={'breakout-dropdown-item' + (isSingle ? ' breakout-single' : '')}>
+                          <div className="breakout-dropdown-values">
+                            <span className="breakout-dropdown-label">{b}</span>
+                            <span className={'breakout-dropdown-val breakout-val-all' + (!hasSelection || allSelected ? ' breakout-val-selected' : ' breakout-val-unselected')}
+                              onClick={function (e) {
+                                e.stopPropagation();
+                                setOpenBreakoutDropdown(null);
+                                setBreakoutSelections({});
+                                handleAddBreakout(si, b);
+                              }}
+                            >all</span>
+                            {vals && vals.map(function (v) {
+                              var isSelected = hasSelection && selected_vals.has(v);
+                              return (
+                                <span key={v}
+                                  className={'breakout-dropdown-val' + (isSelected ? ' breakout-val-selected' : '') + (hasSelection && !isSelected && !allSelected ? ' breakout-val-unselected' : '')}
+                                  onClick={function (e) {
+                                    e.stopPropagation();
+                                    setBreakoutSelections(function (prev) {
+                                      var next = Object.assign({}, prev);
+                                      var set = next[b] ? new Set(next[b]) : new Set();
+                                      if (set.has(v)) { set.delete(v); } else { set.add(v); }
+                                      if (set.size === 0) { delete next[b]; } else { next[b] = set; }
+                                      return next;
+                                    });
+                                  }}
+                                >{v}</span>
+                              );
+                            })}
+                            {hasSelection && !allSelected && (
+                              <button className="btn btn-sm btn-secondary breakout-dropdown-add" onClick={function (e) {
+                                e.stopPropagation();
+                                var breakoutStr = b + '=' + Array.from(selected_vals).join('+');
+                                setOpenBreakoutDropdown(null);
+                                setBreakoutSelections({});
+                                handleAddBreakout(si, breakoutStr);
+                              }}>Add</button>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            );
+          })()}
           {sm.breakouts.length > 0 && (
             <select className="compare-breakout-select" value={sm.chartType || 'bar'} onChange={function (e) { handleChartTypeChange(si, e.target.value); }}>
               <option value="bar">Bars</option>
