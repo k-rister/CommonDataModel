@@ -26,6 +26,7 @@ jobs:
             .github/rulesets/**
             .github/workflows/run-crucible-tracking.yaml
             .github/workflows/crucible-ci.yaml
+            .github/workflows/fork-check.yaml
             .github/workflows/controller-build.yaml
             .github/workflows/cdm-ci.yaml
             docs/**
@@ -35,7 +36,7 @@ jobs:
   real-cdm-ci:
     runs-on: ubuntu-latest
     needs: changes
-    if: ${{ github.event_name == 'workflow_dispatch' || needs.changes.outputs.only-docs != 'true' }}
+    if: ${{ github.event.pull_request.head.repo.fork != true && (github.event_name == 'workflow_dispatch' || needs.changes.outputs.only-docs != 'true') }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v3
@@ -57,7 +58,7 @@ jobs:
   faux-cdm-ci:
     runs-on: ubuntu-latest
     needs: changes
-    if: ${{ github.event_name != 'workflow_dispatch' && needs.changes.outputs.only-docs == 'true' }}
+    if: ${{ github.event.pull_request.head.repo.fork != true && github.event_name != 'workflow_dispatch' && needs.changes.outputs.only-docs == 'true' }}
     steps:
       - run: 'echo "faux-cdm-ci-complete"'
 
