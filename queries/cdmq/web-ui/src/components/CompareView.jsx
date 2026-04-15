@@ -905,12 +905,14 @@ const CompareView = forwardRef(function CompareView({ selected, groupByList, set
       var varyingKeys = cv.varyingKeys;
       var commonItems = cv.common;
 
-      // Sort by compound group-by value, then series-by value (natural/numeric sort)
+      // Sort by each group-by dimension individually (natural/numeric sort per dimension)
       var sorted = iters.slice().sort(function (a, b) {
-        var ga = getCompoundGroupValue(a, groupByList);
-        var gb = getCompoundGroupValue(b, groupByList);
-        var cmp = naturalCompare(ga, gb);
-        if (cmp !== 0) return cmp;
+        for (var gi = 0; gi < groupByList.length; gi++) {
+          var va = getDimValue(a, groupByList[gi]);
+          var vb = getDimValue(b, groupByList[gi]);
+          var cmp = naturalCompare(va, vb);
+          if (cmp !== 0) return cmp;
+        }
         return 0;
       });
 
@@ -1001,8 +1003,8 @@ const CompareView = forwardRef(function CompareView({ selected, groupByList, set
               entry['supp_' + si + '_error'] = computeStddev(lv);
               entry['supp_' + si + '_samples'] = lv.sampleValues ? lv.sampleValues.length : 0;
             }
-            // For breakouts with multiple labels, also store per-label data
-            if (labelKeys.length > 1) {
+            // Store per-label data for breakout sidebar display
+            if (labelKeys.length >= 1) {
               labelKeys.forEach(function (lk) {
                 var lv = smv.labels[lk];
                 entry['supp_' + si + '_' + lk] = lv.mean;
@@ -1058,6 +1060,21 @@ const CompareView = forwardRef(function CompareView({ selected, groupByList, set
 
     return result;
   }, [iterations, metricValues, groupByList, supplementalMetrics, hiddenSet]);
+
+  // Resolve the pinned entry from current chart data so sidebars always
+  // read fresh data (pinnedEntry.entry may be stale after chart recomputation)
+  var resolvedPinnedEntry = useMemo(function () {
+    if (!pinnedEntry || !pinnedEntry.entry) return null;
+    var itId = pinnedEntry.entry.iterationId;
+    for (var ci = 0; ci < charts.length; ci++) {
+      for (var di = 0; di < charts[ci].data.length; di++) {
+        if (charts[ci].data[di].iterationId === itId) {
+          return { entry: charts[ci].data[di], metricName: pinnedEntry.metricName };
+        }
+      }
+    }
+    return pinnedEntry; // fallback to original if not found
+  }, [pinnedEntry, charts]);
 
   if (loading) {
     return (
@@ -1473,8 +1490,8 @@ const CompareView = forwardRef(function CompareView({ selected, groupByList, set
                     </div>
                     {supplementalMetrics.length > 0 && <div className="compare-yaxis-label compare-yaxis-right">&nbsp;</div>}
                     <div className="compare-sidebar" style={{ maxHeight: 180 }}>
-                    {pinnedEntry && pinnedEntry.entry && !pinnedEntry.entry.isGap ? (function () {
-                      var e = pinnedEntry.entry;
+                    {resolvedPinnedEntry && resolvedPinnedEntry.entry && !resolvedPinnedEntry.entry.isGap ? (function () {
+                      var e = resolvedPinnedEntry.entry;
                       if (sm.breakouts.length > 0) {
                         var prefix = dataKey + '_';
                         var flatItems = [];
@@ -1703,8 +1720,8 @@ const CompareView = forwardRef(function CompareView({ selected, groupByList, set
                 <div className="compare-yaxis-label compare-yaxis-right">&nbsp;</div>
               ) : null}
               <div className="compare-sidebar" style={{ maxHeight: chartHeight }}>
-                {pinnedEntry && pinnedEntry.entry && !pinnedEntry.entry.isGap && pinnedEntry.entry.value != null ? (function () {
-                  var e = pinnedEntry.entry;
+                {resolvedPinnedEntry && resolvedPinnedEntry.entry && !resolvedPinnedEntry.entry.isGap && resolvedPinnedEntry.entry.value != null ? (function () {
+                  var e = resolvedPinnedEntry.entry;
                   var items = [];
                   var pmText = formatValue(e.value);
                   if (e.samples > 1 && e.stddevPct != null) pmText += ' (\u00b1' + e.stddevPct.toFixed(1) + '%)';
@@ -1939,8 +1956,8 @@ const CompareView = forwardRef(function CompareView({ selected, groupByList, set
                     </div>
                     {supplementalMetrics.length > 0 && <div className="compare-yaxis-label compare-yaxis-right">&nbsp;</div>}
                     <div className="compare-sidebar" style={{ maxHeight: 180 }}>
-                    {pinnedEntry && pinnedEntry.entry && !pinnedEntry.entry.isGap ? (function () {
-                      var e = pinnedEntry.entry;
+                    {resolvedPinnedEntry && resolvedPinnedEntry.entry && !resolvedPinnedEntry.entry.isGap ? (function () {
+                      var e = resolvedPinnedEntry.entry;
                       if (sm.breakouts.length > 0) {
                         var prefix = dataKey + '_';
                         var flatItems = [];
