@@ -671,6 +671,109 @@ body {
   border-right: 2px solid var(--border-strong);
 }
 
+/* Hierarchical group cells in iteration table */
+.group-cell {
+  vertical-align: middle;
+  border-right: 1px solid var(--border-strong);
+  padding: 6px 10px;
+  max-width: 15vw;
+}
+
+.group-cell-content {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 100%;
+}
+
+/* Allow chips inside group cells to wrap at natural separators */
+.group-cell .tag,
+.group-cell .param,
+.group-cell .benchmark-badge {
+  white-space: normal;
+  overflow-wrap: break-word;
+  word-break: break-word;
+  max-width: 100%;
+}
+
+/* Run IDs in group cells should also wrap */
+.group-cell .run-id {
+  white-space: normal;
+  overflow-wrap: break-word;
+  word-break: break-all;
+}
+
+.group-cell-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.group-header-th {
+  text-align: center;
+  border-right: 1px solid var(--border-strong);
+  padding: 4px 6px;
+}
+
+.group-header-label {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+}
+
+.group-header-name {
+  font-size: 11px;
+  padding: 2px 6px;
+  border-radius: 3px;
+}
+
+.group-reorder-btn {
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  font-size: 10px;
+  padding: 1px 4px;
+  border-radius: 3px;
+  cursor: pointer;
+  line-height: 1;
+}
+
+.group-reorder-btn:hover {
+  background: var(--accent-light);
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.group-hide-btn {
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  font-size: 12px;
+  padding: 0 3px;
+  border-radius: 3px;
+  cursor: pointer;
+  line-height: 1.2;
+  margin-left: 2px;
+}
+
+.group-hide-btn:hover {
+  background: var(--danger);
+  color: #fff;
+  border-color: var(--danger);
+}
+
+.hidden-dim-chip {
+  text-decoration: line-through;
+  opacity: 0.6;
+  cursor: pointer;
+}
+
+.hidden-dim-chip:hover {
+  opacity: 1;
+  text-decoration: none;
+}
+
 a.run-id {
   color: var(--accent);
   text-decoration: none;

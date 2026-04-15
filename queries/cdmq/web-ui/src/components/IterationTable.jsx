@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback } from 'react';
+import { useState, useMemo, useCallback, useEffect, useRef } from 'react';
 import * as api from '../api/cdm';
 import { timeWork } from '../debugLog';
 
@@ -33,6 +33,174 @@ function formatValue(v) {
   if (Math.abs(v) >= 1000) return v.toFixed(0);
   if (Math.abs(v) >= 1) return v.toFixed(2);
   return v.toPrecision(3);
+}
+
+// Natural sort: compare as numbers when both values are numeric, otherwise as strings
+function naturalCompare(a, b) {
+  var na = Number(a);
+  var nb = Number(b);
+  if (!isNaN(na) && !isNaN(nb)) return na - nb;
+  if (a < b) return -1;
+  if (a > b) return 1;
+  return 0;
+}
+
+// Get the value of a dimension for an iteration
+function getDimValue(it, dim) {
+  if (!dim || dim === 'none') return '__all__';
+  if (dim === 'run') return it.runId;
+  if (dim === 'benchmark') return it.benchmark || '';
+  if (dim.startsWith('param:')) {
+    var arg = dim.substring(6);
+    var p = (it.params || []).find(function (pp) { return pp.arg === arg; });
+    return p ? String(p.val) : '';
+  }
+  if (dim.startsWith('tag:')) {
+    var name = dim.substring(4);
+    var t = (it.tags || []).find(function (tt) { return tt.name === name; });
+    return t ? t.val : '';
+  }
+  return '';
+}
+
+// Get a display label for a dimension
+function formatDimLabel(dim) {
+  if (!dim || dim === 'none') return '';
+  if (dim === 'run') return 'run';
+  if (dim === 'benchmark') return 'benchmark';
+  if (dim.startsWith('param:')) return dim.substring(6);
+  if (dim.startsWith('tag:')) return dim.substring(4);
+  return dim;
+}
+
+// Insert zero-width spaces after natural separator characters to allow clean wrapping
+function wrapFriendly(str) {
+  if (!str) return str;
+  // Insert \u200B (zero-width space) after -, _, ., ,, /, :
+  return String(str).replace(/([_\-.,/:])(?!$)/g, '$1\u200B');
+}
+
+// Get the CSS class for a dimension chip
+function dimChipClass(dim) {
+  if (dim === 'benchmark') return 'benchmark-badge';
+  if (dim.startsWith('tag:')) return 'tag';
+  return 'param';
+}
+
+// Compute varying dimensions sorted by distinct value count (fewest first)
+function computeGroupDims(iterations) {
+  var runs = new Set();
+  var benchmarks = new Set();
+  var paramValues = {};
+  var tagValues = {};
+  for (var i = 0; i < iterations.length; i++) {
+    var it = iterations[i];
+    if (it.runId) runs.add(it.runId);
+    if (it.benchmark) benchmarks.add(it.benchmark);
+    (it.params || []).forEach(function (p) {
+      if (!paramValues[p.arg]) paramValues[p.arg] = new Set();
+      paramValues[p.arg].add(String(p.val));
+    });
+    (it.tags || []).forEach(function (t) {
+      if (!tagValues[t.name]) tagValues[t.name] = new Set();
+      tagValues[t.name].add(t.val);
+    });
+  }
+  var dims = [];
+  if (runs.size > 1) dims.push({ dim: 'run', count: runs.size });
+  if (benchmarks.size > 1) dims.push({ dim: 'benchmark', count: benchmarks.size });
+  Object.keys(paramValues).sort().forEach(function (arg) {
+    if (paramValues[arg].size > 1) dims.push({ dim: 'param:' + arg, count: paramValues[arg].size });
+  });
+  Object.keys(tagValues).sort().forEach(function (name) {
+    if (tagValues[name].size > 1) dims.push({ dim: 'tag:' + name, count: tagValues[name].size });
+  });
+  // Sort by distinct count ascending (fewest values = best top-level grouping)
+  dims.sort(function (a, b) { return a.count - b.count; });
+  return dims.map(function (d) { return d.dim; });
+}
+
+// Build a recursive tree grouping iterations by each dimension level
+// Returns: { value, dim, children: [...subtrees], iterations: [...leaf iterations] }
+function buildGroupTree(iterations, dims, depth) {
+  if (depth >= dims.length) {
+    // Leaf level: return individual iterations
+    return { iterations: iterations };
+  }
+  var dim = dims[depth];
+  var groups = {};
+  var groupOrder = [];
+  iterations.forEach(function (it) {
+    var val = getDimValue(it, dim);
+    if (!groups[val]) {
+      groups[val] = [];
+      groupOrder.push(val);
+    }
+    groups[val].push(it);
+  });
+  // Sort group keys naturally
+  groupOrder.sort(naturalCompare);
+  var children = groupOrder.map(function (val) {
+    var subtree = buildGroupTree(groups[val], dims, depth + 1);
+    subtree.value = val;
+    subtree.dim = dim;
+    return subtree;
+  });
+  return { children: children };
+}
+
+// Count total leaf iterations in a tree node
+function countLeaves(node) {
+  if (node.iterations) return node.iterations.length;
+  var total = 0;
+  (node.children || []).forEach(function (c) { total += countLeaves(c); });
+  return total;
+}
+
+// Collect all leaf iterations from a tree node
+function collectLeaves(node) {
+  if (node.iterations) return node.iterations;
+  var result = [];
+  (node.children || []).forEach(function (c) {
+    result = result.concat(collectLeaves(c));
+  });
+  return result;
+}
+
+// Flatten the tree into table rows (group headers + leaf rows)
+// Each row is either { type: 'group', dim, value, depth, rowSpan, iterations } or
+// { type: 'leaf', iteration, depth, coveredDims }
+function flattenTree(node, depth, coveredDims, groupDims) {
+  var rows = [];
+  if (node.children) {
+    node.children.forEach(function (child, childIdx) {
+      var leafCount = countLeaves(child);
+      var leaves = collectLeaves(child);
+      // Add group header row
+      rows.push({
+        type: 'group',
+        dim: child.dim,
+        value: child.value,
+        depth: depth,
+        rowSpan: leafCount,
+        iterations: leaves,
+        groupIdx: childIdx,
+      });
+      var newCovered = coveredDims.concat([child.dim]);
+      var subRows = flattenTree(child, depth + 1, newCovered, groupDims);
+      rows = rows.concat(subRows);
+    });
+  } else if (node.iterations) {
+    node.iterations.forEach(function (it) {
+      rows.push({
+        type: 'leaf',
+        iteration: it,
+        depth: depth,
+        coveredDims: coveredDims,
+      });
+    });
+  }
+  return rows;
 }
 
 export default function IterationTable({ iterations, selected, onToggleSelect, onToggleSelectAll, loading, onAddTagFilter, onAddParamFilter }) {
@@ -151,31 +319,9 @@ export default function IterationTable({ iterations, selected, onToggleSelect, o
 
   const allOnPageSelected = sorted.length > 0 && sorted.every((it) => selected.has(it.iterationId));
 
-  // Precompute run group parity and rowSpan info
-  const { runGroupParity, runGroupSpan } = useMemo(() => {
-    var parity = [];
-    var span = []; // null = skip cell, number = rowSpan for this cell
-    var current = 0;
-    var groupStart = 0;
-    for (var i = 0; i < sorted.length; i++) {
-      if (i > 0 && sorted[i].runId !== sorted[i - 1].runId) {
-        current = 1 - current;
-        // Set the span for the group that just ended
-        span[groupStart] = i - groupStart;
-        groupStart = i;
-      }
-      parity.push(current);
-      span.push(null);
-    }
-    // Final group
-    if (sorted.length > 0) {
-      span[groupStart] = sorted.length - groupStart;
-    }
-    return { runGroupParity: parity, runGroupSpan: span };
-  }, [sorted]);
-
-  // Compute globally varying vs common params and tags across all displayed iterations
-  const { globalVarying, commonList } = useMemo(() => {
+  // Compute globally common items (same value across ALL iterations)
+  const commonList = useMemo(() => {
+    if (iterations.length === 0) return [];
     var paramValues = {};
     var tagValues = {};
     var benchmarks = new Set();
@@ -191,42 +337,191 @@ export default function IterationTable({ iterations, selected, onToggleSelect, o
         tagValues[t.name].add(t.val);
       });
     }
-    var benchmarkVaries = benchmarks.size > 1;
-    var varyingArgs = new Set();
-    Object.keys(paramValues).forEach(function (arg) {
-      if (paramValues[arg].size > 1) varyingArgs.add(arg);
-    });
-    var varyingTags = new Set();
-    Object.keys(tagValues).forEach(function (name) {
-      if (tagValues[name].size > 1) varyingTags.add(name);
-    });
-    // Build per-iteration lists
-    var varying = {};
-    var common = {};
-    for (var i = 0; i < iterations.length; i++) {
-      var it = iterations[i];
-      var v = [];
-      var c = [];
-      // Benchmark
-      if (benchmarkVaries) {
-        v.unshift({ key: 'benchmark', val: it.benchmark || '', type: 'benchmark' });
-      } else {
-        c.unshift({ key: 'benchmark', val: it.benchmark || '', type: 'benchmark' });
-      }
-      (it.params || []).forEach(function (p) {
-        if (varyingArgs.has(p.arg)) v.push({ key: p.arg, val: p.val, type: 'param' });
-        else c.push({ key: p.arg, val: p.val, type: 'param' });
-      });
-      (it.tags || []).forEach(function (t) {
-        if (varyingTags.has(t.name)) v.push({ key: t.name, val: t.val, type: 'tag' });
-        else c.push({ key: t.name, val: t.val, type: 'tag' });
-      });
-      varying[it.iterationId] = v;
-      common[it.iterationId] = c;
+    var common = [];
+    if (benchmarks.size === 1) {
+      common.push({ key: 'benchmark', val: Array.from(benchmarks)[0], type: 'benchmark' });
     }
-    var commonList = iterations.length > 0 ? (common[iterations[0].iterationId] || []) : [];
-    return { globalVarying: varying, commonList: commonList };
+    Object.keys(paramValues).sort().forEach(function (arg) {
+      if (paramValues[arg].size === 1) {
+        common.push({ key: arg, val: Array.from(paramValues[arg])[0], type: 'param' });
+      }
+    });
+    Object.keys(tagValues).sort().forEach(function (name) {
+      if (tagValues[name].size === 1) {
+        common.push({ key: name, val: Array.from(tagValues[name])[0], type: 'tag' });
+      }
+    });
+    return common;
   }, [iterations]);
+
+  // Group-by dimensions as state so user can reorder/hide
+  const [groupDims, setGroupDims] = useState([]);
+  const [hiddenDims, setHiddenDims] = useState([]);
+  const prevIterCount = useRef(0);
+
+  // Auto-compute group dims when iterations change (reset hidden)
+  useEffect(function () {
+    if (iterations.length !== prevIterCount.current) {
+      prevIterCount.current = iterations.length;
+      setGroupDims(computeGroupDims(iterations));
+      setHiddenDims([]);
+    }
+  }, [iterations]);
+
+  // Active group dims = groupDims minus hidden
+  const activeGroupDims = useMemo(function () {
+    var hiddenSet = new Set(hiddenDims);
+    return groupDims.filter(function (d) { return !hiddenSet.has(d); });
+  }, [groupDims, hiddenDims]);
+
+  // Build the hierarchical tree from active group dims
+  const tableRows = useMemo(function () {
+    if (activeGroupDims.length === 0) {
+      return sorted.map(function (it) {
+        return { type: 'leaf', iteration: it, depth: 0, coveredDims: [] };
+      });
+    }
+    var tree = buildGroupTree(sorted, activeGroupDims, 0);
+    return flattenTree(tree, 0, [], activeGroupDims);
+  }, [sorted, activeGroupDims]);
+
+  // Reorder group dimensions (operates on the full groupDims list)
+  function moveGroupDim(dim, direction) {
+    // Find index in activeGroupDims
+    var activeIdx = activeGroupDims.indexOf(dim);
+    var targetActiveIdx = activeIdx + direction;
+    if (targetActiveIdx < 0 || targetActiveIdx >= activeGroupDims.length) return;
+    // Swap in the full groupDims array
+    var fullIdx = groupDims.indexOf(activeGroupDims[activeIdx]);
+    var fullTargetIdx = groupDims.indexOf(activeGroupDims[targetActiveIdx]);
+    var newDims = groupDims.slice();
+    var tmp = newDims[fullIdx];
+    newDims[fullIdx] = newDims[fullTargetIdx];
+    newDims[fullTargetIdx] = tmp;
+    setGroupDims(newDims);
+  }
+
+  function hideGroupDim(dim) {
+    setHiddenDims(function (prev) { return prev.concat([dim]); });
+  }
+
+  function unhideGroupDim(dim) {
+    setHiddenDims(function (prev) { return prev.filter(function (d) { return d !== dim; }); });
+  }
+
+  // For leaf rows, compute which varying items are NOT covered by group headers
+  function getLeafVarying(it, coveredDims) {
+    var coveredSet = new Set(coveredDims);
+    var items = [];
+    // Only include items from varying dimensions that aren't covered by a group header
+    if (!coveredSet.has('benchmark') && iterations.length > 0) {
+      var benchmarks = new Set(iterations.map(function (i) { return i.benchmark; }));
+      if (benchmarks.size > 1) {
+        items.push({ key: 'benchmark', val: it.benchmark || '', type: 'benchmark' });
+      }
+    }
+    (it.params || []).forEach(function (p) {
+      var dim = 'param:' + p.arg;
+      if (coveredSet.has(dim)) return;
+      // Only show if this param varies globally
+      var vals = new Set(iterations.map(function (i) {
+        var pp = (i.params || []).find(function (x) { return x.arg === p.arg; });
+        return pp ? String(pp.val) : '';
+      }));
+      if (vals.size > 1) {
+        items.push({ key: p.arg, val: p.val, type: 'param' });
+      }
+    });
+    (it.tags || []).forEach(function (t) {
+      var dim = 'tag:' + t.name;
+      if (coveredSet.has(dim)) return;
+      var vals = new Set(iterations.map(function (i) {
+        var tt = (i.tags || []).find(function (x) { return x.name === t.name; });
+        return tt ? tt.val : '';
+      }));
+      if (vals.size > 1) {
+        items.push({ key: t.name, val: t.val, type: 'tag' });
+      }
+    });
+    return items;
+  }
+
+  // Track which group header cells to render (rowSpan logic)
+  // Each group row may emit cells at multiple depth levels on the first row of a group
+  const renderPlan = useMemo(function () {
+    // For each table row index, determine which group cells to render
+    // A group cell is rendered on the first leaf row of that group
+    var plan = [];
+    var groupStack = []; // stack of { dim, value, startRow, rowSpan, depth }
+    var leafIdx = 0;
+
+    for (var i = 0; i < tableRows.length; i++) {
+      var row = tableRows[i];
+      if (row.type === 'group') {
+        groupStack.push({
+          dim: row.dim,
+          value: row.value,
+          rowSpan: row.rowSpan,
+          depth: row.depth,
+          iterations: row.iterations,
+          rendered: false,
+        });
+      } else {
+        // Leaf row — collect any unrendered group cells
+        var cells = [];
+        for (var g = 0; g < groupStack.length; g++) {
+          if (!groupStack[g].rendered) {
+            cells.push({
+              dim: groupStack[g].dim,
+              value: groupStack[g].value,
+              rowSpan: groupStack[g].rowSpan,
+              depth: groupStack[g].depth,
+              iterations: groupStack[g].iterations,
+            });
+            groupStack[g].rendered = true;
+            groupStack[g].remaining = groupStack[g].rowSpan;
+          }
+        }
+        plan.push({
+          iteration: row.iteration,
+          coveredDims: row.coveredDims,
+          groupCells: cells,
+          leafIdx: leafIdx,
+        });
+        leafIdx++;
+        // Decrement remaining and pop finished groups
+        for (var g = groupStack.length - 1; g >= 0; g--) {
+          if (groupStack[g].remaining != null) {
+            groupStack[g].remaining--;
+            if (groupStack[g].remaining <= 0) {
+              groupStack.splice(g, 1);
+            }
+          }
+        }
+      }
+    }
+    return plan;
+  }, [tableRows]);
+
+  // Compute alternating group colors based on top-level group index
+  const rowGroupParity = useMemo(function () {
+    if (renderPlan.length === 0) return [];
+    var parity = [];
+    var currentParity = 0;
+    var currentTopValue = null;
+    for (var i = 0; i < renderPlan.length; i++) {
+      // Check if any depth-0 group cell starts on this row
+      var topCell = renderPlan[i].groupCells.find(function (c) { return c.depth === 0; });
+      if (topCell) {
+        if (currentTopValue !== null && topCell.value !== currentTopValue) {
+          currentParity = 1 - currentParity;
+        }
+        currentTopValue = topCell.value;
+      }
+      parity.push(currentParity);
+    }
+    return parity;
+  }, [renderPlan]);
 
   return (
     <div className="results-panel">
@@ -256,27 +551,56 @@ export default function IterationTable({ iterations, selected, onToggleSelect, o
           </div>
         )}
       </div>
-      {commonList.length > 0 && (
+      {(commonList.length > 0 || hiddenDims.length > 0) && (
         <div className="results-common">
-          <span className="results-common-label">Common:</span>
-          {commonList.map(function (p, i) {
-            return (
-              <span key={i} className={p.type === 'benchmark' ? 'benchmark-badge' : p.type === 'tag' ? 'tag' : 'param param-common'}>
-                {p.type === 'tag' && <span className="tag-key">{p.key}</span>}
-                {p.type === 'tag' ? '=' + p.val : p.type === 'benchmark' ? p.val : p.key + '=' + p.val}
-              </span>
-            );
-          })}
+          {commonList.length > 0 && (
+            <>
+              <span className="results-common-label">Common:</span>
+              {commonList.map(function (p, i) {
+                return (
+                  <span key={i} className={p.type === 'benchmark' ? 'benchmark-badge' : p.type === 'tag' ? 'tag' : 'param param-common'}>
+                    {p.type === 'tag' && <span className="tag-key">{p.key}</span>}
+                    {p.type === 'tag' ? '=' + p.val : p.type === 'benchmark' ? p.val : p.key + '=' + p.val}
+                  </span>
+                );
+              })}
+            </>
+          )}
+          {hiddenDims.length > 0 && (
+            <>
+              <span className="results-common-label" style={commonList.length > 0 ? { marginLeft: 16 } : undefined}>Hidden:</span>
+              {hiddenDims.map(function (dim) {
+                return (
+                  <span key={dim} className={dimChipClass(dim) + ' hidden-dim-chip'} onClick={function () { unhideGroupDim(dim); }} title="Click to restore">
+                    {formatDimLabel(dim)}
+                  </span>
+                );
+              })}
+            </>
+          )}
         </div>
       )}
       <div className="results-table-wrap">
         <table className="results-table">
           <thead>
             <tr>
-              <th className={thClass('run')} onClick={() => handleSort('run')}>
-                Run
-                {sorted.length > 0 && <div className="column-hint">select iterations then click <span className="hint-button">Compare</span> above to graph</div>}
-              </th>
+              {activeGroupDims.map(function (dim, di) {
+                var label = formatDimLabel(dim);
+                return (
+                  <th key={dim} className="group-header-th">
+                    <div className="group-header-label">
+                      {di > 0 && (
+                        <button className="group-reorder-btn" onClick={function () { moveGroupDim(dim, -1); }} title="Move left">&lt;</button>
+                      )}
+                      <span className={'group-header-name ' + dimChipClass(dim)}>{label}</span>
+                      {di < activeGroupDims.length - 1 && (
+                        <button className="group-reorder-btn" onClick={function () { moveGroupDim(dim, 1); }} title="Move right">&gt;</button>
+                      )}
+                      <button className="group-hide-btn" onClick={function () { hideGroupDim(dim); }} title="Hide this dimension">&times;</button>
+                    </div>
+                  </th>
+                );
+              })}
               <th>
                 <input
                   type="checkbox"
@@ -286,8 +610,8 @@ export default function IterationTable({ iterations, selected, onToggleSelect, o
                 />
               </th>
               <th>
-                Unique <span className="benchmark-badge" style={{fontSize:9,verticalAlign:'middle'}}>bench</span> <span className="tag" style={{fontSize:9,verticalAlign:'middle'}}>tag</span> <span className="param" style={{fontSize:9,verticalAlign:'middle'}}>param</span>
-                {sorted.length > 0 && <div className="column-hint">click any box below to add filter, then click <span className="hint-button">Search</span> to apply</div>}
+                Details
+                {sorted.length > 0 && activeGroupDims.length === 0 && <div className="column-hint">click any value to add filter</div>}
               </th>
               <th className={thClass('metric')} onClick={() => handleSort('metric')}>
                 Primary Metric
@@ -303,14 +627,14 @@ export default function IterationTable({ iterations, selected, onToggleSelect, o
           <tbody>
             {loading && (
               <tr className="loading-row">
-                <td colSpan={6}>
+                <td colSpan={6 + activeGroupDims.length}>
                   <span className="spinner" /> Loading iterations...
                 </td>
               </tr>
             )}
             {!loading && sorted.length === 0 && iterations.length === 0 && (
               <tr className="loading-row">
-                <td colSpan={6}>
+                <td colSpan={6 + activeGroupDims.length}>
                   <div className="workflow-guide">
                     <div className="workflow-title">Getting Started</div>
                     <div className="workflow-steps">
@@ -324,7 +648,7 @@ export default function IterationTable({ iterations, selected, onToggleSelect, o
                       </div>
                       <div className="workflow-step">
                         <span className="workflow-num">3</span>
-                        <span>Click values in the <b>Unique</b> column to refine your filters, then search again</span>
+                        <span>Click values in the results to refine your filters, then search again</span>
                       </div>
                       <div className="workflow-step">
                         <span className="workflow-num">4</span>
@@ -337,86 +661,131 @@ export default function IterationTable({ iterations, selected, onToggleSelect, o
             )}
             {!loading && sorted.length === 0 && iterations.length > 0 && (
               <tr className="loading-row">
-                <td colSpan={6}>
+                <td colSpan={6 + activeGroupDims.length}>
                   <span className="empty-msg">No iterations match the current filter.</span>
                 </td>
               </tr>
             )}
             {!loading &&
-              sorted.map((it, idx) => {
+              renderPlan.map(function (row, rowIdx) {
+                var it = row.iteration;
                 var rowClasses = [];
                 if (selected.has(it.iterationId)) rowClasses.push('selected');
-                rowClasses.push(runGroupParity[idx] === 0 ? 'run-group-even' : 'run-group-odd');
-                if (idx > 0 && it.runId !== sorted[idx - 1].runId) rowClasses.push('run-group-border');
+                rowClasses.push(rowGroupParity[rowIdx] === 0 ? 'run-group-even' : 'run-group-odd');
+                // Add border when the top-level group changes
+                if (rowIdx > 0 && rowGroupParity[rowIdx] !== rowGroupParity[rowIdx - 1]) {
+                  rowClasses.push('run-group-border');
+                }
+                var leafVarying = getLeafVarying(it, row.coveredDims);
+
                 return (
-                <tr
-                  key={it.iterationId}
-                  className={rowClasses.join(' ')}
-                  onClick={() => onToggleSelect(it)}
-                  style={{ cursor: 'pointer' }}
-                >
-                  {runGroupSpan[idx] != null && (
-                    <td rowSpan={runGroupSpan[idx]} className="run-id-cell" onClick={(e) => e.stopPropagation()}>
-                      {buildRunUrl(it.runSource) ? (
-                        <a className="run-id" href={buildRunUrl(it.runSource)} target="_blank" rel="noopener noreferrer">{it.runId}</a>
-                      ) : (
-                        <span className="run-id">{it.runId}</span>
-                      )}
-                      <div className="run-date">{formatDate(it.runBegin)}</div>
-                      <div style={{ marginTop: 4 }}>
-                        <input
-                          type="checkbox"
-                          checked={sorted.slice(idx, idx + runGroupSpan[idx]).every(function (r) { return selected.has(r.iterationId); })}
-                          onChange={function () { onToggleSelectAll(sorted.slice(idx, idx + runGroupSpan[idx])); }}
-                          title="Select all iterations in this run"
-                        />
-                      </div>
+                  <tr
+                    key={it.iterationId}
+                    className={rowClasses.join(' ')}
+                    onClick={() => onToggleSelect(it)}
+                    style={{ cursor: 'pointer' }}
+                  >
+                    {row.groupCells.map(function (cell) {
+                      var allInGroup = cell.iterations.every(function (gi) { return selected.has(gi.iterationId); });
+                      var displayValue = cell.value;
+                      var chipClass = dimChipClass(cell.dim);
+                      var label = formatDimLabel(cell.dim);
+
+                      // For run dimension, show run ID, date, and link
+                      if (cell.dim === 'run') {
+                        var runIt = cell.iterations[0];
+                        return (
+                          <td key={cell.dim + ':' + cell.value} rowSpan={cell.rowSpan} className="group-cell" onClick={function (e) { e.stopPropagation(); }}>
+                            <div className="group-cell-content">
+                              <input
+                                type="checkbox"
+                                checked={allInGroup}
+                                onChange={function () { onToggleSelectAll(cell.iterations); }}
+                                title={'Select all ' + cell.rowSpan + ' iteration(s) in this group'}
+                              />
+                              <div className="group-cell-detail">
+                                {buildRunUrl(runIt.runSource) ? (
+                                  <a className="run-id" href={buildRunUrl(runIt.runSource)} target="_blank" rel="noopener noreferrer">{wrapFriendly(displayValue)}</a>
+                                ) : (
+                                  <span className="run-id">{wrapFriendly(displayValue)}</span>
+                                )}
+                                <div className="run-date">{formatDate(runIt.runBegin)}</div>
+                              </div>
+                            </div>
+                          </td>
+                        );
+                      }
+
+                      return (
+                        <td key={cell.dim + ':' + cell.value} rowSpan={cell.rowSpan} className="group-cell" onClick={function (e) { e.stopPropagation(); }}>
+                          <div className="group-cell-content">
+                            <input
+                              type="checkbox"
+                              checked={allInGroup}
+                              onChange={function () { onToggleSelectAll(cell.iterations); }}
+                              title={'Select all ' + cell.rowSpan + ' iteration(s) in this group'}
+                            />
+                            <span
+                              className={chipClass + ' clickable-filter'}
+                              title={'Click to filter by ' + label + '=' + displayValue}
+                              onClick={function (e) {
+                                e.stopPropagation();
+                                if (cell.dim.startsWith('tag:')) onAddTagFilter(label, displayValue);
+                                else if (cell.dim.startsWith('param:')) onAddParamFilter(label, displayValue);
+                              }}
+                            >
+                              {wrapFriendly(displayValue)}
+                            </span>
+                          </div>
+                        </td>
+                      );
+                    })}
+                    <td onClick={(e) => e.stopPropagation()}>
+                      <input
+                        type="checkbox"
+                        checked={selected.has(it.iterationId)}
+                        onChange={() => onToggleSelect(it)}
+                      />
                     </td>
-                  )}
-                  <td onClick={(e) => e.stopPropagation()}>
-                    <input
-                      type="checkbox"
-                      checked={selected.has(it.iterationId)}
-                      onChange={() => onToggleSelect(it)}
-                    />
-                  </td>
-                  <td>
-                    {(globalVarying[it.iterationId] || []).length > 0
-                      ? (globalVarying[it.iterationId] || []).map((p, i) => (
-                          <span key={i}
-                            className={(p.type === 'benchmark' ? 'benchmark-badge' : p.type === 'tag' ? 'tag' : 'param') + (p.type !== 'benchmark' ? ' clickable-filter' : '')}
-                            title={p.type !== 'benchmark' ? 'Click to filter by ' + p.key + '=' + p.val : p.val}
-                            onClick={function (e) {
-                              e.stopPropagation();
-                              if (p.type === 'tag' && onAddTagFilter) onAddTagFilter(p.key, p.val);
-                              else if (p.type === 'param' && onAddParamFilter) onAddParamFilter(p.key, p.val);
-                            }}
-                          >
-                            {p.type === 'tag' && <span className="tag-key">{p.key}</span>}
-                            {p.type === 'tag' ? '=' + p.val : p.type === 'benchmark' ? p.val : p.key + '=' + p.val}
-                          </span>
-                        ))
-                      : '-'}
-                  </td>
-                  <td className="metric-value">
-                    {formatMetric(it.primaryMetric)}
-                    {metricValues[it.iterationId] && metricValues[it.iterationId].mean != null && (
-                      <span className="metric-number">
-                        {' '}{formatValue(metricValues[it.iterationId].mean)}
-                        {metricValues[it.iterationId].stddevPct != null && metricValues[it.iterationId].sampleValues.length > 1 && (
-                          <span className="metric-stddev"> ({metricValues[it.iterationId].stddevPct.toFixed(1)}%)</span>
-                        )}
-                      </span>
-                    )}
-                  </td>
-                  <td>{it.sampleCount}</td>
-                  <td>
-                    {it.passCount > 0 && <span className="status-pass">{it.passCount}P</span>}
-                    {it.passCount > 0 && it.failCount > 0 && ' '}
-                    {it.failCount > 0 && <span className="status-fail">{it.failCount}F</span>}
-                    {it.passCount === 0 && it.failCount === 0 && '-'}
-                  </td>
-                </tr>
+                    <td>
+                      {leafVarying.length > 0
+                        ? leafVarying.map(function (p, i) {
+                            return (
+                              <span key={i}
+                                className={(p.type === 'benchmark' ? 'benchmark-badge' : p.type === 'tag' ? 'tag' : 'param') + (p.type !== 'benchmark' ? ' clickable-filter' : '')}
+                                title={p.type !== 'benchmark' ? 'Click to filter by ' + p.key + '=' + p.val : p.val}
+                                onClick={function (e) {
+                                  e.stopPropagation();
+                                  if (p.type === 'tag' && onAddTagFilter) onAddTagFilter(p.key, p.val);
+                                  else if (p.type === 'param' && onAddParamFilter) onAddParamFilter(p.key, p.val);
+                                }}
+                              >
+                                {p.type === 'tag' && <span className="tag-key">{p.key}</span>}
+                                {p.type === 'tag' ? '=' + p.val : p.type === 'benchmark' ? p.val : p.key + '=' + p.val}
+                              </span>
+                            );
+                          })
+                        : <span className="text-muted">-</span>}
+                    </td>
+                    <td className="metric-value">
+                      {formatMetric(it.primaryMetric)}
+                      {metricValues[it.iterationId] && metricValues[it.iterationId].mean != null && (
+                        <span className="metric-number">
+                          {' '}{formatValue(metricValues[it.iterationId].mean)}
+                          {metricValues[it.iterationId].stddevPct != null && metricValues[it.iterationId].sampleValues.length > 1 && (
+                            <span className="metric-stddev"> ({metricValues[it.iterationId].stddevPct.toFixed(1)}%)</span>
+                          )}
+                        </span>
+                      )}
+                    </td>
+                    <td>{it.sampleCount}</td>
+                    <td>
+                      {it.passCount > 0 && <span className="status-pass">{it.passCount}P</span>}
+                      {it.passCount > 0 && it.failCount > 0 && ' '}
+                      {it.failCount > 0 && <span className="status-fail">{it.failCount}F</span>}
+                      {it.passCount === 0 && it.failCount === 0 && '-'}
+                    </td>
+                  </tr>
                 );
               })}
           </tbody>
