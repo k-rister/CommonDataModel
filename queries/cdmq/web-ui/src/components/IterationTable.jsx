@@ -49,6 +49,7 @@ function naturalCompare(a, b) {
 function getDimValue(it, dim) {
   if (!dim || dim === 'none') return '__all__';
   if (dim === 'run') return it.runId;
+  if (dim === 'date') return it.runBegin || '0';
   if (dim === 'benchmark') return it.benchmark || '';
   if (dim.startsWith('param:')) {
     var arg = dim.substring(6);
@@ -63,10 +64,21 @@ function getDimValue(it, dim) {
   return '';
 }
 
+// Format the display value for a dimension (used in group cells)
+function formatDimDisplayValue(dim, value) {
+  if (dim === 'date') {
+    if (!value || value === '0') return '-';
+    var d = new Date(Number(value));
+    return d.toLocaleDateString() + ' ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  }
+  return value;
+}
+
 // Get a display label for a dimension
 function formatDimLabel(dim) {
   if (!dim || dim === 'none') return '';
   if (dim === 'run') return 'run';
+  if (dim === 'date') return 'date';
   if (dim === 'benchmark') return 'benchmark';
   if (dim.startsWith('param:')) return dim.substring(6);
   if (dim.startsWith('tag:')) return dim.substring(4);
@@ -106,8 +118,14 @@ function computeGroupDims(iterations) {
       tagValues[t.name].add(t.val);
     });
   }
+  // Count distinct dates (by run — each run has one date)
+  var dates = new Set();
+  for (var j = 0; j < iterations.length; j++) {
+    if (iterations[j].runBegin) dates.add(iterations[j].runBegin);
+  }
   var dims = [];
   if (runs.size > 1) dims.push({ dim: 'run', count: runs.size });
+  if (dates.size > 1) dims.push({ dim: 'date', count: dates.size });
   if (benchmarks.size > 1) dims.push({ dim: 'benchmark', count: benchmarks.size });
   Object.keys(paramValues).sort().forEach(function (arg) {
     if (paramValues[arg].size > 1) dims.push({ dim: 'param:' + arg, count: paramValues[arg].size });
@@ -121,8 +139,8 @@ function computeGroupDims(iterations) {
 }
 
 // Build a recursive tree grouping iterations by each dimension level
-// Returns: { value, dim, children: [...subtrees], iterations: [...leaf iterations] }
-function buildGroupTree(iterations, dims, depth) {
+// sortDirs is an object: { dim: 'asc' | 'desc' }, defaults to 'asc'
+function buildGroupTree(iterations, dims, depth, sortDirs) {
   if (depth >= dims.length) {
     // Leaf level: return individual iterations
     return { iterations: iterations };
@@ -138,10 +156,14 @@ function buildGroupTree(iterations, dims, depth) {
     }
     groups[val].push(it);
   });
-  // Sort group keys naturally
-  groupOrder.sort(naturalCompare);
+  // Sort group keys naturally, respecting per-dimension sort direction
+  var dir = (sortDirs && sortDirs[dim]) || 'asc';
+  groupOrder.sort(function (a, b) {
+    var cmp = naturalCompare(a, b);
+    return dir === 'desc' ? -cmp : cmp;
+  });
   var children = groupOrder.map(function (val) {
-    var subtree = buildGroupTree(groups[val], dims, depth + 1);
+    var subtree = buildGroupTree(groups[val], dims, depth + 1, sortDirs);
     subtree.value = val;
     subtree.dim = dim;
     return subtree;
@@ -354,17 +376,19 @@ export default function IterationTable({ iterations, selected, onToggleSelect, o
     return common;
   }, [iterations]);
 
-  // Group-by dimensions as state so user can reorder/hide
+  // Group-by dimensions as state so user can reorder/hide/sort
   const [groupDims, setGroupDims] = useState([]);
   const [hiddenDims, setHiddenDims] = useState([]);
+  const [dimSortDir, setDimSortDir] = useState({}); // { dim: 'asc' | 'desc' }, default asc
   const prevIterCount = useRef(0);
 
-  // Auto-compute group dims when iterations change (reset hidden)
+  // Auto-compute group dims when iterations change (reset hidden/sort)
   useEffect(function () {
     if (iterations.length !== prevIterCount.current) {
       prevIterCount.current = iterations.length;
       setGroupDims(computeGroupDims(iterations));
       setHiddenDims([]);
+      setDimSortDir({});
     }
   }, [iterations]);
 
@@ -381,9 +405,9 @@ export default function IterationTable({ iterations, selected, onToggleSelect, o
         return { type: 'leaf', iteration: it, depth: 0, coveredDims: [] };
       });
     }
-    var tree = buildGroupTree(sorted, activeGroupDims, 0);
+    var tree = buildGroupTree(sorted, activeGroupDims, 0, dimSortDir);
     return flattenTree(tree, 0, [], activeGroupDims);
-  }, [sorted, activeGroupDims]);
+  }, [sorted, activeGroupDims, dimSortDir]);
 
   // Reorder group dimensions (operates on the full groupDims list)
   function moveGroupDim(dim, direction) {
@@ -407,6 +431,14 @@ export default function IterationTable({ iterations, selected, onToggleSelect, o
 
   function unhideGroupDim(dim) {
     setHiddenDims(function (prev) { return prev.filter(function (d) { return d !== dim; }); });
+  }
+
+  function toggleDimSort(dim) {
+    setDimSortDir(function (prev) {
+      var next = Object.assign({}, prev);
+      next[dim] = prev[dim] === 'desc' ? 'asc' : 'desc';
+      return next;
+    });
   }
 
   // For leaf rows, compute which varying items are NOT covered by group headers
@@ -529,6 +561,9 @@ export default function IterationTable({ iterations, selected, onToggleSelect, o
         <h2>Iterations {iterations.length > 0 && `(${iterations.length})`}</h2>
         {iterations.length > 0 && (
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <span className="benchmark-badge" style={{fontSize:9}}>bench</span>
+            <span className="tag" style={{fontSize:9}}>tag</span>
+            <span className="param" style={{fontSize:9}}>param</span>
             <button
               className="btn btn-sm btn-secondary"
               onClick={fetchMetricValues}
@@ -586,17 +621,21 @@ export default function IterationTable({ iterations, selected, onToggleSelect, o
             <tr>
               {activeGroupDims.map(function (dim, di) {
                 var label = formatDimLabel(dim);
+                var sortDir = dimSortDir[dim] || 'asc';
                 return (
                   <th key={dim} className="group-header-th">
-                    <div className="group-header-label">
+                    <span className={'group-header-name ' + dimChipClass(dim)}>{label}</span>
+                    <div className="group-header-controls">
                       {di > 0 && (
                         <button className="group-reorder-btn" onClick={function () { moveGroupDim(dim, -1); }} title="Move left">&lt;</button>
                       )}
-                      <span className={'group-header-name ' + dimChipClass(dim)}>{label}</span>
+                      <button className={'group-sort-btn' + (sortDir === 'desc' ? ' sort-desc' : '')} onClick={function () { toggleDimSort(dim); }} title={sortDir === 'asc' ? 'Sort descending' : 'Sort ascending'}>
+                        {sortDir === 'asc' ? '\u25B2' : '\u25BC'}
+                      </button>
+                      <button className="group-hide-btn" onClick={function () { hideGroupDim(dim); }} title="Hide this dimension">&times;</button>
                       {di < activeGroupDims.length - 1 && (
                         <button className="group-reorder-btn" onClick={function () { moveGroupDim(dim, 1); }} title="Move right">&gt;</button>
                       )}
-                      <button className="group-hide-btn" onClick={function () { hideGroupDim(dim); }} title="Hide this dimension">&times;</button>
                     </div>
                   </th>
                 );
@@ -691,7 +730,7 @@ export default function IterationTable({ iterations, selected, onToggleSelect, o
                       var chipClass = dimChipClass(cell.dim);
                       var label = formatDimLabel(cell.dim);
 
-                      // For run dimension, show run ID, date, and link
+                      // For run dimension, show run ID as a link
                       if (cell.dim === 'run') {
                         var runIt = cell.iterations[0];
                         return (
@@ -703,18 +742,17 @@ export default function IterationTable({ iterations, selected, onToggleSelect, o
                                 onChange={function () { onToggleSelectAll(cell.iterations); }}
                                 title={'Select all ' + cell.rowSpan + ' iteration(s) in this group'}
                               />
-                              <div className="group-cell-detail">
-                                {buildRunUrl(runIt.runSource) ? (
-                                  <a className="run-id" href={buildRunUrl(runIt.runSource)} target="_blank" rel="noopener noreferrer">{wrapFriendly(displayValue)}</a>
-                                ) : (
-                                  <span className="run-id">{wrapFriendly(displayValue)}</span>
-                                )}
-                                <div className="run-date">{formatDate(runIt.runBegin)}</div>
-                              </div>
+                              {buildRunUrl(runIt.runSource) ? (
+                                <a className="run-id" href={buildRunUrl(runIt.runSource)} target="_blank" rel="noopener noreferrer">{wrapFriendly(displayValue)}</a>
+                              ) : (
+                                <span className="run-id">{wrapFriendly(displayValue)}</span>
+                              )}
                             </div>
                           </td>
                         );
                       }
+
+                      var formattedValue = formatDimDisplayValue(cell.dim, displayValue);
 
                       return (
                         <td key={cell.dim + ':' + cell.value} rowSpan={cell.rowSpan} className="group-cell" onClick={function (e) { e.stopPropagation(); }}>
@@ -726,15 +764,15 @@ export default function IterationTable({ iterations, selected, onToggleSelect, o
                               title={'Select all ' + cell.rowSpan + ' iteration(s) in this group'}
                             />
                             <span
-                              className={chipClass + ' clickable-filter'}
-                              title={'Click to filter by ' + label + '=' + displayValue}
+                              className={chipClass + (cell.dim.startsWith('tag:') || cell.dim.startsWith('param:') ? ' clickable-filter' : '')}
+                              title={cell.dim.startsWith('tag:') || cell.dim.startsWith('param:') ? 'Click to filter by ' + label + '=' + displayValue : formattedValue}
                               onClick={function (e) {
                                 e.stopPropagation();
                                 if (cell.dim.startsWith('tag:')) onAddTagFilter(label, displayValue);
                                 else if (cell.dim.startsWith('param:')) onAddParamFilter(label, displayValue);
                               }}
                             >
-                              {wrapFriendly(displayValue)}
+                              {wrapFriendly(formattedValue)}
                             </span>
                           </div>
                         </td>

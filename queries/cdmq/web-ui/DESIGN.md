@@ -206,26 +206,42 @@ This is the core data structure passed around the UI. Each iteration object is a
 
 ### Visual Design
 
-The iteration table uses several visual techniques to reduce redundancy and guide users:
+The iteration table uses hierarchical grouping to organize iterations by their varying dimensions:
 
-**Run grouping:**
-- Iterations from the same run are grouped together with alternating background colors
-- Run ID, date, and a "select all" checkbox occupy a single rowSpanned cell on the left
-- A heavier border separates different run groups
+**Hierarchical grouping:**
+- All varying dimensions (params, tags, run ID, date, benchmark) are auto-computed
+- Dimensions sorted by distinct value count (fewest first) — same algorithm as compare view
+- Each dimension gets its own column with a header showing the dimension name
+- Group cells use `rowSpan` to span all child iterations, with checkboxes for bulk selection
+- Alternating background colors distinguish top-level groups
 
-**Common vs. Unique:**
-- **Common section** (above the table): params/tags/benchmark that have the same value across ALL displayed iterations — shown once, not repeated per row
-- **Unique column**: params/tags/benchmark that VARY across displayed iterations — each iteration row shows its own values
-- This is computed globally across all iterations (not per-run like the server's `uniqueParams`)
+**Column controls (in header):**
+- **`<` / `>`**: Reorder columns (changes grouping hierarchy)
+- **`▲` / `▼`**: Toggle sort direction (ascending/descending) per dimension
+- **`×`**: Hide dimension column (shown as strikethrough chip in "Hidden:" area, click to restore)
+
+**Date as independent dimension:**
+- Run date is its own group-by column, separate from run ID
+- Can be moved independently (e.g., to the rightmost position)
+- Sorted by timestamp with natural sort (supports descending for newest-first)
+- Displayed as formatted date/time string
+
+**Common section** (above the table): params/tags/benchmark that have the same value across ALL displayed iterations — shown once, not repeated in the table.
+
+**Details column**: Shows remaining varying items not covered by group headers. Color-coded legend chips (`bench`, `tag`, `param`) displayed in the header bar.
 
 **Clickable filters:**
-- Unique param/tag badges in the table are clickable — clicking adds them as search filters
+- Group cell param/tag badges are clickable — clicking adds them as search filters
 - This calls `SearchPanel.addTagFilter()` or `addParamFilter()` via the ref exposed by `useImperativeHandle`
 
 **Primary metric values:**
 - Not loaded with the initial search (too slow for many iterations)
 - "Show Values" button triggers a separate API call (`/iterations/metric-values`)
 - Values displayed inline: `uperf::Gbps 1234.56 (2.3%)`
+
+**Text wrapping:**
+- Long values wrap at natural separators (`-`, `_`, `.`, `,`, `/`, `:`) using zero-width spaces inserted by `wrapFriendly()`
+- `overflow-wrap: break-word` without `word-break: break-all` ensures breaks only at separator boundaries
 
 ### Param Filter
 
@@ -345,7 +361,7 @@ The primary metric chart includes a "Refine" button that adds the primary metric
 
 Each metric's controls render directly below its chart panel (not grouped at the top). Controls include:
 - Colored left border (consistent color across chart and panel)
-- **+ Breakout** dropdown (populated with `remainingBreakouts` from server)
+- **+ Breakout** button — opens a custom dropdown (see Breakout Value Preview below)
 - **Chart type** selector (Bars, Stacked, Lines) — visible when breakouts are active
 - **Sample** selector — choose which sample to display (auto-selects the sample closest to the primary metric mean)
 - **Filter** input — accepts `gt:N`, `ge:N`, `lt:N`, `le:N` syntax for server-side label filtering
@@ -361,17 +377,30 @@ Supplemental metrics query a single sample instead of averaging across all:
 - Sample dropdown shows each sample's primary metric value for reference
 - Filters work correctly since they operate on single-sample data
 
+### Breakout Value Preview
+
+The "+ Breakout" button opens a custom div-based dropdown (not a native `<select>`) that shows:
+- Each remaining breakout dimension as a row
+- **Dimension name** (bold) followed by an **"all"** chip and individual **value chips**
+- Values fetched lazily on first open via `POST /api/v1/iterations/breakout-values`, cached per source::type
+- **Single-value dimensions** dimmed to 35% opacity and sorted to the bottom
+- **Multi-value dimensions** sorted to the top, full opacity
+- Value chips are **clickable toggles** — select specific values to pre-filter the breakout
+- Clicking **"all"** adds the breakout with no filter
+- Clicking **"Add"** (appears when specific values selected) adds the breakout as `name=val1+val2`
+
 ### Breakout Workflow
 
-1. Click "+ Breakout" dropdown, select a dimension (e.g., "direction")
-2. Client re-queries the metric with `breakout: ["direction"]`
-3. Server returns multi-label values: `{ "<rx>": { mean, ... }, "<tx>": { mean, ... } }`
-4. Server also returns updated `remainingBreakouts` for further drilling
-5. Chart renders one bar/line per label; chart type selectable (Bars/Stacked/Lines)
-6. User can add another breakout level (e.g., "hostname") — labels become `"<rx>-<host1>"`, etc.
-7. Breakout chips have editable filter inputs accepting exact values, `val1+val2`, `r/regex/`, or `R/regex/`
-8. "Apply" button re-queries with the filter applied
-9. Removing a breakout re-queries with the reduced breakout array
+1. Click "+ Breakout" — dropdown shows dimensions with their values
+2. Click "all" or select specific values and click "Add"
+3. Client re-queries the metric with `breakout: ["direction"]` (or `["direction=rx+tx"]` if filtered)
+4. Server returns multi-label values: `{ "<rx>": { mean, ... }, "<tx>": { mean, ... } }`
+5. Server also returns updated `remainingBreakouts` for further drilling
+6. Chart renders one bar/line per label; chart type selectable (Bars/Stacked/Lines)
+7. User can add another breakout level (e.g., "hostname") — labels become `"<rx>-<host1>"`, etc.
+8. Breakout chips have editable filter inputs accepting exact values, `val1+val2`, `r/regex/`, or `R/regex/`
+9. "Apply" button re-queries with the filter applied
+10. Removing a breakout re-queries with the reduced breakout array
 
 ### Data Format
 
@@ -574,6 +603,9 @@ The `/iterations/details` endpoint accepts `{ runIds, start, end }` and returns 
 | POST | `/api/v1/iterations/metric-sources` | Available metric sources across runs |
 | POST | `/api/v1/iterations/metric-types` | Types for a given source |
 | POST | `/api/v1/iterations/supplemental-metric` | Fetch metric values with optional breakouts |
+| POST | `/api/v1/iterations/breakout-values` | Distinct values per breakout dimension |
+
+The breakout-values endpoint accepts `{ runIds, start, end, source, type, breakouts: [...] }` and returns `{ breakouts: { "hostname": ["h1", "h2"], "num": ["0", "1"] } }`. Uses a single `_msearch` request with one terms aggregation per breakout dimension on `metric_desc.names.<dim>`. Results cached client-side per source::type.
 
 The supplemental-metric endpoint accepts `{ iterations, runIds, start, end, source, type, breakout, filter, sampleIndex }`:
 - `iterations`: array of `{iterationId, runId}` for targeted queries (avoids discovering all iterations from runIds)
@@ -633,6 +665,7 @@ These endpoints use a `resolveRun` middleware that finds the OpenSearch instance
 - `mgetParams`, `mgetSamples`, `mgetPrimaryMetric`, `mgetPrimaryPeriodName` — Iteration-level
 - `mgetSampleStatuses`, `mgetPrimaryPeriodId`, `mgetPeriodRange` — Sample/period-level
 - `mgetMetricSources`, `mgetMetricTypes` — Metric discovery
+- `mgetBreakoutValues` — Distinct values per breakout dimension via terms aggregation on `metric_desc.names.*`
 - `getMetricDataSets` — Full metric data retrieval with breakout support
 
 **Important:** `mgetPrimaryMetric` and `mgetPrimaryPeriodName` return 1D arrays (collapsed from 2D). Do NOT access `result[i][0]` — use `result[i]` directly. Accessing `[0]` on a string returns just the first character (e.g., "measurement"[0] = "m").
