@@ -129,6 +129,17 @@ export async function getSupplementalMetric(params) {
   });
 }
 
+export async function getBreakoutValues(params) {
+  return request('POST', '/iterations/breakout-values', {
+    runIds: params.runIds,
+    start: params.start,
+    end: params.end,
+    source: params.source,
+    type: params.type,
+    breakouts: params.breakouts,
+  });
+}
+
 export async function getMetricData(params) {
   return request('POST', `/metric-data`, params);
 }

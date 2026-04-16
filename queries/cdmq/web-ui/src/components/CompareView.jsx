@@ -504,6 +504,22 @@ const CompareView = forwardRef(function CompareView({ selected, groupByList, set
   var [addMetricDisplay, setAddMetricDisplay] = useState('panel'); // 'overlay' or 'panel'
   var [showAddMetric, setShowAddMetric] = useState(false);
   var [pinnedEntry, setPinnedEntry] = useState(null);
+  var [breakoutValueCache, setBreakoutValueCache] = useState({}); // { "source::type": { "hostname": ["h1","h2"], ... } }
+  var [openBreakoutDropdown, setOpenBreakoutDropdown] = useState(null); // index of metric with open dropdown
+  var [breakoutSelections, setBreakoutSelections] = useState({}); // { "dimName": Set of selected values }
+  var breakoutDropdownRef = useRef(null);
+
+  // Close breakout dropdown on outside click
+  useEffect(function () {
+    if (openBreakoutDropdown == null) return;
+    function handleClick(e) {
+      if (breakoutDropdownRef.current && !breakoutDropdownRef.current.contains(e.target)) {
+        setOpenBreakoutDropdown(null);
+      }
+    }
+    document.addEventListener('mousedown', handleClick);
+    return function () { document.removeEventListener('mousedown', handleClick); };
+  }, [openBreakoutDropdown]);
 
   var iterations = useMemo(function () {
     return Array.from(selected.values());
@@ -563,9 +579,12 @@ const CompareView = forwardRef(function CompareView({ selected, groupByList, set
       if (o.value === 'none') return;
       var vals = new Set();
       iterations.forEach(function (it) {
-        vals.add(getDimValue(it, o.value));
+        var v = getDimValue(it, o.value);
+        if (v !== '') vals.add(v); // skip empty (missing tag/param)
       });
-      dimCounts.push({ value: o.value, count: vals.size });
+      if (vals.size > 1) {
+        dimCounts.push({ value: o.value, count: vals.size });
+      }
     });
     // Sort by distinct count ascending (fewest values = best grouping level)
     dimCounts.sort(function (a, b) { return a.count - b.count; });
@@ -699,6 +718,26 @@ const CompareView = forwardRef(function CompareView({ selected, groupByList, set
       setAddMetricLoading(false);
     });
   }, [iterations, addMetricSource, addMetricType, addMetricDisplay, supplementalMetrics]);
+
+  // Fetch breakout distinct values for a metric's remaining breakouts (lazy, cached)
+  function fetchBreakoutValues(source, type, breakoutNames) {
+    var cacheKey = source + '::' + type;
+    if (breakoutValueCache[cacheKey]) return; // already fetched
+    if (!breakoutNames || breakoutNames.length === 0) return;
+    var ctx = getRunContext();
+    api.getBreakoutValues({
+      runIds: ctx.runIds, start: ctx.start, end: ctx.end,
+      source: source, type: type, breakouts: breakoutNames,
+    }).then(function (res) {
+      setBreakoutValueCache(function (prev) {
+        var next = Object.assign({}, prev);
+        next[cacheKey] = res.breakouts || {};
+        return next;
+      });
+    }).catch(function (err) {
+      console.error('Failed to fetch breakout values:', err);
+    });
+  }
 
   var handleAddBreakout = useCallback(function (si, breakoutName) {
     var sm = supplementalMetrics[si];
@@ -905,12 +944,14 @@ const CompareView = forwardRef(function CompareView({ selected, groupByList, set
       var varyingKeys = cv.varyingKeys;
       var commonItems = cv.common;
 
-      // Sort by compound group-by value, then series-by value (natural/numeric sort)
+      // Sort by each group-by dimension individually (natural/numeric sort per dimension)
       var sorted = iters.slice().sort(function (a, b) {
-        var ga = getCompoundGroupValue(a, groupByList);
-        var gb = getCompoundGroupValue(b, groupByList);
-        var cmp = naturalCompare(ga, gb);
-        if (cmp !== 0) return cmp;
+        for (var gi = 0; gi < groupByList.length; gi++) {
+          var va = getDimValue(a, groupByList[gi]);
+          var vb = getDimValue(b, groupByList[gi]);
+          var cmp = naturalCompare(va, vb);
+          if (cmp !== 0) return cmp;
+        }
         return 0;
       });
 
@@ -1001,8 +1042,8 @@ const CompareView = forwardRef(function CompareView({ selected, groupByList, set
               entry['supp_' + si + '_error'] = computeStddev(lv);
               entry['supp_' + si + '_samples'] = lv.sampleValues ? lv.sampleValues.length : 0;
             }
-            // For breakouts with multiple labels, also store per-label data
-            if (labelKeys.length > 1) {
+            // Store per-label data for breakout sidebar display
+            if (labelKeys.length >= 1) {
               labelKeys.forEach(function (lk) {
                 var lv = smv.labels[lk];
                 entry['supp_' + si + '_' + lk] = lv.mean;
@@ -1059,6 +1100,21 @@ const CompareView = forwardRef(function CompareView({ selected, groupByList, set
     return result;
   }, [iterations, metricValues, groupByList, supplementalMetrics, hiddenSet]);
 
+  // Resolve the pinned entry from current chart data so sidebars always
+  // read fresh data (pinnedEntry.entry may be stale after chart recomputation)
+  var resolvedPinnedEntry = useMemo(function () {
+    if (!pinnedEntry || !pinnedEntry.entry) return null;
+    var itId = pinnedEntry.entry.iterationId;
+    for (var ci = 0; ci < charts.length; ci++) {
+      for (var di = 0; di < charts[ci].data.length; di++) {
+        if (charts[ci].data[di].iterationId === itId) {
+          return { entry: charts[ci].data[di], metricName: pinnedEntry.metricName };
+        }
+      }
+    }
+    return pinnedEntry; // fallback to original if not found
+  }, [pinnedEntry, charts]);
+
   if (loading) {
     return (
       <div className="compare-view">
@@ -1081,12 +1137,90 @@ const CompareView = forwardRef(function CompareView({ selected, groupByList, set
       <div key={'ctrl-' + si} className="compare-metric-row" style={{ borderLeftColor: color }}>
         <div className="compare-metric-row-header">
           {sm.loading && <span className="spinner" style={{ marginLeft: 8 }} />}
-          {!sm.loading && sm.remainingBreakouts && sm.remainingBreakouts.length > 0 && (
-            <select className="compare-breakout-select" value="" onChange={function (e) { if (e.target.value) handleAddBreakout(si, e.target.value); }}>
-              <option value="">+ Breakout</option>
-              {sm.remainingBreakouts.map(function (b) { return <option key={b} value={b}>{b}</option>; })}
-            </select>
-          )}
+          {!sm.loading && sm.remainingBreakouts && sm.remainingBreakouts.length > 0 && (function () {
+            var cacheKey = sm.source + '::' + sm.type;
+            var bvCache = breakoutValueCache[cacheKey] || {};
+            var isOpen = openBreakoutDropdown === si;
+            // Sort: multi-value breakouts first, single-value last; alphabetical within each group
+            var sortedBreakouts = sm.remainingBreakouts.slice().sort(function (a, b) {
+              var ca = bvCache[a] ? bvCache[a].length : -1;
+              var cb = bvCache[b] ? bvCache[b].length : -1;
+              var aMulti = ca === -1 || ca > 1 ? 1 : 0;
+              var bMulti = cb === -1 || cb > 1 ? 1 : 0;
+              if (aMulti !== bMulti) return bMulti - aMulti;
+              if (a < b) return -1;
+              if (a > b) return 1;
+              return 0;
+            });
+            return (
+              <div className="breakout-dropdown-wrap" ref={isOpen ? breakoutDropdownRef : undefined}>
+                <button className="btn btn-sm btn-secondary breakout-dropdown-trigger" onClick={function () {
+                  if (isOpen) {
+                    setOpenBreakoutDropdown(null);
+                    setBreakoutSelections({});
+                  } else {
+                    setOpenBreakoutDropdown(si);
+                    setBreakoutSelections({});
+                    fetchBreakoutValues(sm.source, sm.type, sm.remainingBreakouts);
+                  }
+                }}>+ Breakout</button>
+                {isOpen && (
+                  <div className="breakout-dropdown-menu">
+                    {sortedBreakouts.map(function (b) {
+                      var vals = bvCache[b];
+                      var count = vals ? vals.length : null;
+                      var isSingle = count === 1;
+                      var selected_vals = breakoutSelections[b]; // Set or undefined
+                      var hasSelection = selected_vals && selected_vals.size > 0;
+                      var allSelected = hasSelection && vals && selected_vals.size === vals.length;
+                      return (
+                        <div key={b} className={'breakout-dropdown-item' + (isSingle ? ' breakout-single' : '')}>
+                          <div className="breakout-dropdown-values">
+                            <span className="breakout-dropdown-label">{b}</span>
+                            <span className={'breakout-dropdown-val breakout-val-all' + (!hasSelection || allSelected ? ' breakout-val-selected' : ' breakout-val-unselected')}
+                              onClick={function (e) {
+                                e.stopPropagation();
+                                setOpenBreakoutDropdown(null);
+                                setBreakoutSelections({});
+                                handleAddBreakout(si, b);
+                              }}
+                            >all</span>
+                            {vals && vals.map(function (v) {
+                              var isSelected = hasSelection && selected_vals.has(v);
+                              return (
+                                <span key={v}
+                                  className={'breakout-dropdown-val' + (isSelected ? ' breakout-val-selected' : '') + (hasSelection && !isSelected && !allSelected ? ' breakout-val-unselected' : '')}
+                                  onClick={function (e) {
+                                    e.stopPropagation();
+                                    setBreakoutSelections(function (prev) {
+                                      var next = Object.assign({}, prev);
+                                      var set = next[b] ? new Set(next[b]) : new Set();
+                                      if (set.has(v)) { set.delete(v); } else { set.add(v); }
+                                      if (set.size === 0) { delete next[b]; } else { next[b] = set; }
+                                      return next;
+                                    });
+                                  }}
+                                >{v}</span>
+                              );
+                            })}
+                            {hasSelection && !allSelected && (
+                              <button className="btn btn-sm btn-secondary breakout-dropdown-add" onClick={function (e) {
+                                e.stopPropagation();
+                                var breakoutStr = b + '=' + Array.from(selected_vals).join('+');
+                                setOpenBreakoutDropdown(null);
+                                setBreakoutSelections({});
+                                handleAddBreakout(si, breakoutStr);
+                              }}>Add</button>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            );
+          })()}
           {sm.breakouts.length > 0 && (
             <select className="compare-breakout-select" value={sm.chartType || 'bar'} onChange={function (e) { handleChartTypeChange(si, e.target.value); }}>
               <option value="bar">Bars</option>
@@ -1156,128 +1290,6 @@ const CompareView = forwardRef(function CompareView({ selected, groupByList, set
 
   return (
     <div className="compare-view">
-      <div className="compare-controls">
-        <div className="compare-control">
-          <label>Group by</label>
-          {groupByList.map(function (dim, gi) {
-            return (
-              <span key={gi} className="compare-groupby-chip">
-                {gi > 0 && (
-                  <button className="compare-chip-arrow" onClick={function () {
-                    var next = groupByList.slice();
-                    next[gi] = next[gi - 1];
-                    next[gi - 1] = dim;
-                    setGroupByList(next);
-                  }} title="Move left">&lsaquo;</button>
-                )}
-                <span className="compare-chip-label">{dimOptions.find(function (o) { return o.value === dim; })?.label || dim}</span>
-                {gi < groupByList.length - 1 && (
-                  <button className="compare-chip-arrow" onClick={function () {
-                    var next = groupByList.slice();
-                    next[gi] = next[gi + 1];
-                    next[gi + 1] = dim;
-                    setGroupByList(next);
-                  }} title="Move right">&rsaquo;</button>
-                )}
-                <button onClick={function () { setGroupByList(groupByList.filter(function (_, i) { return i !== gi; })); }}>&times;</button>
-              </span>
-            );
-          })}
-          <select
-            value=""
-            onChange={function (e) {
-              if (e.target.value && !groupByList.includes(e.target.value)) {
-                setGroupByList(groupByList.concat([e.target.value]));
-              }
-            }}
-          >
-            <option value="">{groupByList.length === 0 ? 'None' : '+ Add'}</option>
-            {dimOptions.filter(function (o) { return o.value !== 'none' && !groupByList.includes(o.value); }).map(function (o) {
-              return <option key={o.value} value={o.value}>{o.label}</option>;
-            })}
-          </select>
-          <button className="btn btn-sm btn-secondary" onClick={handleAutoGroup} title="Auto-select group-by dimensions to minimize bar labels">
-            Auto
-          </button>
-          {groupByList.length > 0 && (
-            <button className="btn btn-sm btn-secondary" onClick={function () { setGroupByList([]); }}>
-              Clear
-            </button>
-          )}
-        </div>
-        <div className="compare-control">
-          <label>Hide</label>
-          {hiddenFields.map(function (dim, hi) {
-            var opt = allDimOptions.find(function (o) { return o.value === dim; });
-            return (
-              <span key={hi} className="compare-hidden-chip">
-                {opt ? opt.label : dim}
-                <button onClick={function () { setHiddenFields(hiddenFields.filter(function (_, i) { return i !== hi; })); }}>&times;</button>
-              </span>
-            );
-          })}
-          <select
-            value=""
-            onChange={function (e) {
-              if (e.target.value && !hiddenFields.includes(e.target.value)) {
-                // Also remove from groupByList and seriesBy if hidden
-                setHiddenFields(hiddenFields.concat([e.target.value]));
-                if (groupByList.includes(e.target.value)) {
-                  setGroupByList(groupByList.filter(function (d) { return d !== e.target.value; }));
-                }
-              }
-            }}
-          >
-            <option value="">{hiddenFields.length === 0 ? 'None' : '+ Hide'}</option>
-            {allDimOptions.filter(function (o) { return !hiddenFields.includes(o.value); }).map(function (o) {
-              return <option key={o.value} value={o.value}>{o.label}</option>;
-            })}
-          </select>
-        </div>
-      </div>
-      <div className="compare-add-metric-bar">
-        {!showAddMetric && (
-          <button className="btn btn-sm btn-secondary" onClick={handleShowAddMetric}>
-            + Add Metric
-          </button>
-        )}
-        {showAddMetric && (
-          <div className="compare-control">
-            <label>Source</label>
-            <select value={addMetricSource} onChange={function (e) { handleSourceChange(e.target.value); }}>
-              <option value="">Select...</option>
-              {(availableSources || []).map(function (s) { return <option key={s} value={s}>{s}</option>; })}
-            </select>
-          </div>
-        )}
-        {showAddMetric && addMetricSource && (
-          <div className="compare-control">
-            <label>Type</label>
-            <select value={addMetricType} onChange={function (e) { setAddMetricType(e.target.value); }}>
-              <option value="">Select...</option>
-              {(availableTypes || []).map(function (t) { return <option key={t} value={t}>{t}</option>; })}
-            </select>
-          </div>
-        )}
-        {showAddMetric && addMetricSource && addMetricType && (
-          <div className="compare-control">
-            <label>Display</label>
-            <div className="compare-display-toggle">
-              <button className={'btn btn-sm ' + (addMetricDisplay === 'overlay' ? 'btn-primary' : 'btn-secondary')} onClick={function () { setAddMetricDisplay('overlay'); }}>Overlay</button>
-              <button className={'btn btn-sm ' + (addMetricDisplay === 'panel' ? 'btn-primary' : 'btn-secondary')} onClick={function () { setAddMetricDisplay('panel'); }}>Own Panel</button>
-            </div>
-          </div>
-        )}
-        {showAddMetric && addMetricSource && addMetricType && (
-          <button className="btn btn-sm btn-primary" onClick={handleAddMetric} disabled={addMetricLoading}>
-            {addMetricLoading ? <><span className="spinner" style={{ marginRight: 4 }} /> Loading...</> : 'Add'}
-          </button>
-        )}
-        {showAddMetric && (
-          <button className="btn btn-sm btn-secondary" onClick={function () { setShowAddMetric(false); }}>Cancel</button>
-        )}
-      </div>
-
       {charts.map(function (chart, ci) {
         var nonGapData = chart.data.filter(function (d) { return !d.isGap; });
         if (nonGapData.length === 0) {
@@ -1473,8 +1485,8 @@ const CompareView = forwardRef(function CompareView({ selected, groupByList, set
                     </div>
                     {supplementalMetrics.length > 0 && <div className="compare-yaxis-label compare-yaxis-right">&nbsp;</div>}
                     <div className="compare-sidebar" style={{ maxHeight: 180 }}>
-                    {pinnedEntry && pinnedEntry.entry && !pinnedEntry.entry.isGap ? (function () {
-                      var e = pinnedEntry.entry;
+                    {resolvedPinnedEntry && resolvedPinnedEntry.entry && !resolvedPinnedEntry.entry.isGap ? (function () {
+                      var e = resolvedPinnedEntry.entry;
                       if (sm.breakouts.length > 0) {
                         var prefix = dataKey + '_';
                         var flatItems = [];
@@ -1509,13 +1521,41 @@ const CompareView = forwardRef(function CompareView({ selected, groupByList, set
             <div className="compare-chart-with-labels">
               <div className="compare-yaxis-label compare-yaxis-left">{chart.metricName}</div>
               <div className="compare-chart-area">
-            {/* Hierarchical group-by headers — inside chart-area for alignment */}
+            {/* Toolbar: hidden dims, add, auto, clear — above headers */}
+            <div className="compare-hier-toolbar">
+              {hiddenFields.map(function (dim) {
+                var opt = allDimOptions.find(function (o) { return o.value === dim; });
+                return (
+                  <span key={dim} className="compare-hier-hidden-chip" onClick={function () {
+                    setHiddenFields(hiddenFields.filter(function (d) { return d !== dim; }));
+                    if (!groupByList.includes(dim)) setGroupByList(groupByList.concat([dim]));
+                  }} title="Click to restore">{opt ? opt.label : dim}</span>
+                );
+              })}
+              {dimOptions.filter(function (o) { return o.value !== 'none' && !groupByList.includes(o.value) && !hiddenFields.includes(o.value); }).length > 0 && (
+                <select className="compare-hier-add-select" value="" onChange={function (e) {
+                  if (e.target.value && !groupByList.includes(e.target.value)) {
+                    setGroupByList(groupByList.concat([e.target.value]));
+                  }
+                }}>
+                  <option value="">+ Add</option>
+                  {dimOptions.filter(function (o) { return o.value !== 'none' && !groupByList.includes(o.value) && !hiddenFields.includes(o.value); }).map(function (o) {
+                    return <option key={o.value} value={o.value}>{o.label}</option>;
+                  })}
+                </select>
+              )}
+              <button className="btn btn-sm btn-secondary" onClick={handleAutoGroup} style={{ fontSize: 10, padding: '2px 6px' }}>Auto</button>
+              {groupByList.length > 0 && (
+                <button className="btn btn-sm btn-secondary" onClick={function () { setGroupByList([]); }} style={{ fontSize: 10, padding: '2px 6px' }}>Clear</button>
+              )}
+            </div>
+            {/* Hierarchical group-by headers with inline controls */}
             {hasGroupBy(groupByList) && (function () {
               var nonGaps = chart.data.filter(function (d) { return !d.isGap; });
               var iterMap = {};
               iterations.forEach(function (it) { iterMap[it.iterationId] = it; });
               var levels = [];
-              groupByList.forEach(function (dim) {
+              groupByList.forEach(function (dim, dimIdx) {
                 var spans = [];
                 var currentVal = null;
                 var currentCount = 0;
@@ -1530,11 +1570,13 @@ const CompareView = forwardRef(function CompareView({ selected, groupByList, set
                   currentCount++;
                 });
                 if (currentVal !== null) spans.push({ value: formatDimValue(dim, currentVal), count: currentCount });
-                levels.push({ label: formatDimLabel(dim), spans: spans });
+                // Skip dimensions with only one span (single value across all iterations)
+                if (spans.length <= 1) return;
+                levels.push({ label: formatDimLabel(dim), dim: dim, dimIdx: dimIdx, spans: spans });
               });
               return levels.map(function (level, li) {
                 return (
-                  <div key={li} className="compare-hier-row" style={{ marginLeft: 60, marginRight: 30 }}>
+                  <div key={li} className="compare-hier-row">
                     <div className="compare-hier-label">{level.label}</div>
                     <div className="compare-hier-spans">
                       {level.spans.map(function (span, si2) {
@@ -1544,6 +1586,28 @@ const CompareView = forwardRef(function CompareView({ selected, groupByList, set
                           </div>
                         );
                       })}
+                    </div>
+                    <div className="compare-hier-controls">
+                      {level.dimIdx > 0 && (
+                        <button className="compare-hier-btn" onClick={function () {
+                          var next = groupByList.slice();
+                          next[level.dimIdx] = next[level.dimIdx - 1];
+                          next[level.dimIdx - 1] = level.dim;
+                          setGroupByList(next);
+                        }} title="Move up">&#x25B2;</button>
+                      )}
+                      {level.dimIdx < groupByList.length - 1 && (
+                        <button className="compare-hier-btn" onClick={function () {
+                          var next = groupByList.slice();
+                          next[level.dimIdx] = next[level.dimIdx + 1];
+                          next[level.dimIdx + 1] = level.dim;
+                          setGroupByList(next);
+                        }} title="Move down">&#x25BC;</button>
+                      )}
+                      <button className="compare-hier-btn compare-hier-hide" onClick={function () {
+                        setGroupByList(groupByList.filter(function (d) { return d !== level.dim; }));
+                        setHiddenFields(hiddenFields.concat([level.dim]));
+                      }} title="Hide this dimension">&times;</button>
                     </div>
                   </div>
                 );
@@ -1703,8 +1767,8 @@ const CompareView = forwardRef(function CompareView({ selected, groupByList, set
                 <div className="compare-yaxis-label compare-yaxis-right">&nbsp;</div>
               ) : null}
               <div className="compare-sidebar" style={{ maxHeight: chartHeight }}>
-                {pinnedEntry && pinnedEntry.entry && !pinnedEntry.entry.isGap && pinnedEntry.entry.value != null ? (function () {
-                  var e = pinnedEntry.entry;
+                {resolvedPinnedEntry && resolvedPinnedEntry.entry && !resolvedPinnedEntry.entry.isGap && resolvedPinnedEntry.entry.value != null ? (function () {
+                  var e = resolvedPinnedEntry.entry;
                   var items = [];
                   var pmText = formatValue(e.value);
                   if (e.samples > 1 && e.stddevPct != null) pmText += ' (\u00b1' + e.stddevPct.toFixed(1) + '%)';
@@ -1939,8 +2003,8 @@ const CompareView = forwardRef(function CompareView({ selected, groupByList, set
                     </div>
                     {supplementalMetrics.length > 0 && <div className="compare-yaxis-label compare-yaxis-right">&nbsp;</div>}
                     <div className="compare-sidebar" style={{ maxHeight: 180 }}>
-                    {pinnedEntry && pinnedEntry.entry && !pinnedEntry.entry.isGap ? (function () {
-                      var e = pinnedEntry.entry;
+                    {resolvedPinnedEntry && resolvedPinnedEntry.entry && !resolvedPinnedEntry.entry.isGap ? (function () {
+                      var e = resolvedPinnedEntry.entry;
                       if (sm.breakouts.length > 0) {
                         var prefix = dataKey + '_';
                         var flatItems = [];
@@ -1982,6 +2046,49 @@ const CompareView = forwardRef(function CompareView({ selected, groupByList, set
           </div>
         );
       })}
+
+      <div className="compare-add-metric-bar">
+        {!showAddMetric && (
+          <button className="btn btn-sm btn-secondary" onClick={handleShowAddMetric}>
+            + Add Metric
+          </button>
+        )}
+        {showAddMetric && (
+          <div className="compare-control">
+            <label>Source</label>
+            <select value={addMetricSource} onChange={function (e) { handleSourceChange(e.target.value); }}>
+              <option value="">Select...</option>
+              {(availableSources || []).map(function (s) { return <option key={s} value={s}>{s}</option>; })}
+            </select>
+          </div>
+        )}
+        {showAddMetric && addMetricSource && (
+          <div className="compare-control">
+            <label>Type</label>
+            <select value={addMetricType} onChange={function (e) { setAddMetricType(e.target.value); }}>
+              <option value="">Select...</option>
+              {(availableTypes || []).map(function (t) { return <option key={t} value={t}>{t}</option>; })}
+            </select>
+          </div>
+        )}
+        {showAddMetric && addMetricSource && addMetricType && (
+          <div className="compare-control">
+            <label>Display</label>
+            <div className="compare-display-toggle">
+              <button className={'btn btn-sm ' + (addMetricDisplay === 'overlay' ? 'btn-primary' : 'btn-secondary')} onClick={function () { setAddMetricDisplay('overlay'); }}>Overlay</button>
+              <button className={'btn btn-sm ' + (addMetricDisplay === 'panel' ? 'btn-primary' : 'btn-secondary')} onClick={function () { setAddMetricDisplay('panel'); }}>Own Panel</button>
+            </div>
+          </div>
+        )}
+        {showAddMetric && addMetricSource && addMetricType && (
+          <button className="btn btn-sm btn-primary" onClick={handleAddMetric} disabled={addMetricLoading}>
+            {addMetricLoading ? <><span className="spinner" style={{ marginRight: 4 }} /> Loading...</> : 'Add'}
+          </button>
+        )}
+        {showAddMetric && (
+          <button className="btn btn-sm btn-secondary" onClick={function () { setShowAddMetric(false); }}>Cancel</button>
+        )}
+      </div>
 
     </div>
   );

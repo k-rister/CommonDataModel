@@ -1056,6 +1056,38 @@ mgetMetricNames = async function (instance, runIds, sources, types, yearDotMonth
 exports.mgetMetricNames = mgetMetricNames;
 
 // --------------------------------------------------------------------------------------------------------------
+// For a list of breakout dimension names, get the distinct values for each dimension.
+// Returns an object: { "hostname": ["host1", "host2"], "num": ["0", "1", "2"], ... }
+mgetBreakoutValues = async function (instance, runIds, source, type, breakoutNames, yearDotMonth) {
+  if (!breakoutNames || breakoutNames.length === 0) return {};
+  // Build one msearch query per breakout name, each with a terms aggregation
+  var jsonArr = [];
+  for (var i = 0; i < breakoutNames.length; i++) {
+    var req = { query: { bool: { filter: [] } }, size: 0 };
+    // Filter by all runIds using a terms query (OR)
+    req.query.bool.filter.push({ terms: { 'run.run-uuid': runIds } });
+    req.query.bool.filter.push({ term: { 'metric_desc.source': source } });
+    req.query.bool.filter.push({ term: { 'metric_desc.type': type } });
+    req.aggs = { source: { terms: { field: 'metric_desc.names.' + breakoutNames[i], size: bigQuerySize } } };
+    jsonArr.push('{}');
+    jsonArr.push(JSON.stringify(req));
+  }
+  var responses = await esJsonArrRequest(instance, 'metric_desc', '/_msearch', jsonArr, yearDotMonth);
+  var result = {};
+  for (var i = 0; i < breakoutNames.length; i++) {
+    var values = [];
+    if (responses[i] && responses[i].aggregations && responses[i].aggregations.source && Array.isArray(responses[i].aggregations.source.buckets)) {
+      responses[i].aggregations.source.buckets.forEach(function (bucket) {
+        values.push(String(bucket.key));
+      });
+    }
+    result[breakoutNames[i]] = values;
+  }
+  return result;
+};
+exports.mgetBreakoutValues = mgetBreakoutValues;
+
+// --------------------------------------------------------------------------------------------------------------
 getMetricNames = async function (instance, runId, source, type, yearDotMonth) {
   return (await mgetMetricNames(instance, [runId], [source], [type], yearDotMonth))[0];
 };

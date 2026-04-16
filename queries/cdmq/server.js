@@ -1082,6 +1082,42 @@ app.post('/api/v1/iterations/metric-types', async (req, res) => {
 });
 
 // --------------------------------------------------------------------------------------------------------------
+// POST /api/v1/iterations/breakout-values — get distinct values for each breakout dimension
+// Body: { runIds: [...], start, end, source, type, breakouts: ["hostname", "num", ...] }
+// Returns: { breakouts: { "hostname": ["host1", "host2"], "num": ["0", "1"] } }
+// --------------------------------------------------------------------------------------------------------------
+app.post('/api/v1/iterations/breakout-values', async (req, res) => {
+  try {
+    const { runIds, start, end, source, type, breakouts } = req.body;
+    if (!Array.isArray(runIds) || runIds.length === 0 || !source || !type || !Array.isArray(breakouts)) {
+      return res.status(400).json({ code: 'MISSING_PARAMS', error: 'runIds, source, type, and breakouts are required' });
+    }
+    getInstancesInfo(instances);
+    var merged = {};
+    for (const inst of instances) {
+      if (invalidInstance(inst)) continue;
+      var ydm = cdm.buildYearDotMonthRange(inst, 'run', start || null, end || null);
+      var result = await cdm.mgetBreakoutValues(inst, runIds, source, type, breakouts, ydm);
+      // Merge values across instances
+      Object.keys(result).forEach(function (dim) {
+        if (!merged[dim]) merged[dim] = new Set();
+        result[dim].forEach(function (v) { merged[dim].add(v); });
+      });
+    }
+    // Convert Sets to sorted arrays
+    var response = {};
+    Object.keys(merged).forEach(function (dim) {
+      response[dim] = Array.from(merged[dim]).sort();
+    });
+    serverLog('POST /api/v1/iterations/breakout-values: ' + source + '::' + type + ' -> ' + Object.keys(response).map(function (k) { return k + ':' + response[k].length; }).join(', '));
+    res.json({ breakouts: response });
+  } catch (error) {
+    serverError('Error in POST /api/v1/iterations/breakout-values: ' + error);
+    res.status(500).json({ code: 'INTERNAL_ERROR', error: 'Failed to get breakout values: ' + error.message });
+  }
+});
+
+// --------------------------------------------------------------------------------------------------------------
 // POST /api/v1/iterations/supplemental-metric — get values for a specific metric source/type
 // Body: { runIds: [...], start, end, source, type, breakout: [...] }
 // Returns: { values: { iterationId: { labels: { label: { mean, stddevPct, sampleValues } }, remainingBreakouts: [...] } } }
