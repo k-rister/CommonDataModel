@@ -612,8 +612,8 @@ const CompareView = forwardRef(function CompareView({ selected, groupByList, set
     restoredMetricsApplied.current = true;
     var ctx = getRunContext();
     restoredMetrics.forEach(function (rm) {
-      var bestIdx = computeBestSampleIndex();
-      var sIdx = rm.sampleIndex != null ? rm.sampleIndex : bestIdx;
+      var bestIndices = computeBestSampleIndices();
+      var sIdx = rm.sampleIndex != null ? rm.sampleIndex : bestIndices;
       timeWork('Restore ' + rm.source + '::' + rm.type, function () {
         return api.getSupplementalMetric({
           iterations: ctx.iterations, start: ctx.start, end: ctx.end,
@@ -666,10 +666,9 @@ const CompareView = forwardRef(function CompareView({ selected, groupByList, set
     }
   }, [iterations]);
 
-  // Compute best sample index from primary metric values (closest to mean)
-  function computeBestSampleIndex() {
-    // Find the most common sample count and compute best index from first iteration with values
-    var bestIdx = 0;
+  // Compute best sample index per iteration from primary metric values (closest to mean)
+  function computeBestSampleIndices() {
+    var indices = {};
     for (var itId in metricValues) {
       var mv = metricValues[itId];
       if (mv && mv.sampleValues && mv.sampleValues.length > 1) {
@@ -677,14 +676,27 @@ const CompareView = forwardRef(function CompareView({ selected, groupByList, set
         for (var v = 0; v < mv.sampleValues.length; v++) sum += mv.sampleValues[v];
         var mean = sum / mv.sampleValues.length;
         var bestDiff = Infinity;
+        var bestIdx = 0;
         for (var s = 0; s < mv.sampleValues.length; s++) {
           var diff = Math.abs(mv.sampleValues[s] - mean);
           if (diff < bestDiff) { bestDiff = diff; bestIdx = s; }
         }
-        break; // Use the first iteration's best sample as default
+        indices[itId] = bestIdx;
+      } else {
+        indices[itId] = 0;
       }
     }
-    return bestIdx;
+    return indices;
+  }
+
+  // Backward-compatible: single best index (from first iteration with multiple samples)
+  function computeBestSampleIndex() {
+    var indices = computeBestSampleIndices();
+    for (var itId in indices) {
+      var mv = metricValues[itId];
+      if (mv && mv.sampleValues && mv.sampleValues.length > 1) return indices[itId];
+    }
+    return 0;
   }
 
   var handleAddMetric = useCallback(function () {
@@ -692,10 +704,10 @@ const CompareView = forwardRef(function CompareView({ selected, groupByList, set
     var exists = supplementalMetrics.some(function (m) { return m.source === addMetricSource && m.type === addMetricType; });
     if (exists) { setShowAddMetric(false); return; }
     var ctx = getRunContext();
-    var bestIdx = computeBestSampleIndex();
+    var bestIndices = computeBestSampleIndices();
     setAddMetricLoading(true);
     timeWork('Fetch ' + addMetricSource + '::' + addMetricType, function () {
-      return api.getSupplementalMetric({ iterations: ctx.iterations, start: ctx.start, end: ctx.end, source: addMetricSource, type: addMetricType, sampleIndex: bestIdx });
+      return api.getSupplementalMetric({ iterations: ctx.iterations, start: ctx.start, end: ctx.end, source: addMetricSource, type: addMetricType, sampleIndex: bestIndices });
     }).then(function (res) {
       setSupplementalMetrics(function (prev) {
         return prev.concat([{
@@ -705,7 +717,7 @@ const CompareView = forwardRef(function CompareView({ selected, groupByList, set
           display: addMetricDisplay,
           chartType: 'bar',         // 'bar', 'stacked', 'line'
           filter: '',               // e.g., 'gt:0.01', 'lt:100'
-          sampleIndex: bestIdx,     // client-computed best sample
+          sampleIndex: bestIndices, // per-iteration best sample indices
           breakouts: [],            // active breakout dimensions
           remainingBreakouts: res.remainingBreakouts || [],
           loading: false,
@@ -799,17 +811,29 @@ const CompareView = forwardRef(function CompareView({ selected, groupByList, set
     });
   }, [iterations, supplementalMetrics]);
 
-  var handleSampleChange = useCallback(function (si, newSampleIndex) {
-    var idx = newSampleIndex === 'auto' ? computeBestSampleIndex() : parseInt(newSampleIndex, 10);
+  var handleSampleChange = useCallback(function (si, newSampleIndex, iterationId) {
     var sm = supplementalMetrics[si];
+    var newIndices;
+    if (newSampleIndex === 'auto') {
+      newIndices = computeBestSampleIndices();
+    } else if (iterationId) {
+      // Per-iteration override: update just this iteration's sample index
+      newIndices = typeof sm.sampleIndex === 'object' && sm.sampleIndex ? Object.assign({}, sm.sampleIndex) : computeBestSampleIndices();
+      newIndices[iterationId] = parseInt(newSampleIndex, 10);
+    } else {
+      // Global override: set all iterations to the same index
+      var idx = parseInt(newSampleIndex, 10);
+      newIndices = {};
+      iterations.forEach(function (it) { newIndices[it.iterationId] = idx; });
+    }
     setSupplementalMetrics(function (prev) {
       var next = prev.slice();
-      next[si] = Object.assign({}, next[si], { sampleIndex: idx, loading: true });
+      next[si] = Object.assign({}, next[si], { sampleIndex: newIndices, loading: true });
       return next;
     });
     var ctx = getRunContext();
     timeWork('Switch sample for ' + sm.source + '::' + sm.type, function () {
-      return api.getSupplementalMetric({ iterations: ctx.iterations, start: ctx.start, end: ctx.end, source: sm.source, type: sm.type, breakout: sm.breakouts, filter: sm.filter, sampleIndex: idx });
+      return api.getSupplementalMetric({ iterations: ctx.iterations, start: ctx.start, end: ctx.end, source: sm.source, type: sm.type, breakout: sm.breakouts, filter: sm.filter, sampleIndex: newIndices });
     }).then(function (res) {
       setSupplementalMetrics(function (prev) {
         var next = prev.slice();
@@ -1094,7 +1118,7 @@ const CompareView = forwardRef(function CompareView({ selected, groupByList, set
         }
       }
 
-      result.push({ metricName: metricName, data: chartData, commonItems: commonItems, groupInfo: groupInfo });
+      result.push({ metricName: metricName, data: chartData, commonItems: commonItems, groupInfo: groupInfo, varyingKeys: varyingKeys });
     });
 
     return result;
@@ -1229,22 +1253,24 @@ const CompareView = forwardRef(function CompareView({ selected, groupByList, set
             </select>
           )}
           {(function () {
-            var sampleVals = null;
-            for (var ii = 0; ii < iterations.length; ii++) {
-              var mv2 = metricValues[iterations[ii].iterationId];
-              if (mv2 && mv2.sampleValues && mv2.sampleValues.length > 1) { sampleVals = mv2.sampleValues; break; }
-            }
-            if (!sampleVals || sampleVals.length <= 1) return null;
+            // Check if any iteration has multiple samples
+            var hasMultiSample = iterations.some(function (it) {
+              var mv2 = metricValues[it.iterationId];
+              return mv2 && mv2.sampleValues && mv2.sampleValues.length > 1;
+            });
+            if (!hasMultiSample) return null;
+            // Determine if all iterations use auto-best
+            var currentIndices = typeof sm.sampleIndex === 'object' && sm.sampleIndex ? sm.sampleIndex : null;
+            var bestIndices = computeBestSampleIndices();
+            var isAuto = !currentIndices || iterations.every(function (it) {
+              return (currentIndices[it.iterationId] == null || currentIndices[it.iterationId] === bestIndices[it.iterationId]);
+            });
             return (
               <span className="compare-filter-group">
                 <label className="compare-filter-label">Sample:</label>
-                <select className="compare-breakout-select" value={sm.sampleIndex != null ? sm.sampleIndex : 'auto'} onChange={function (e) { handleSampleChange(si, e.target.value); }}>
+                <select className="compare-breakout-select" value={isAuto ? 'auto' : 'custom'} onChange={function (e) { if (e.target.value === 'auto') handleSampleChange(si, 'auto'); }}>
                   <option value="auto">Best (auto)</option>
-                  {sampleVals.map(function (pmv, idx2) {
-                    var label2 = 'Sample ' + (idx2 + 1);
-                    if (pmv != null) label2 += ' (' + formatValue(pmv) + ')';
-                    return <option key={idx2} value={idx2}>{label2}</option>;
-                  })}
+                  <option value="custom" disabled>Per-iteration</option>
                 </select>
               </span>
             );
@@ -1284,6 +1310,47 @@ const CompareView = forwardRef(function CompareView({ selected, groupByList, set
             <button className="btn btn-sm btn-secondary" onClick={function () { handleApplyBreakoutFilter(si); }} disabled={sm.loading} style={{ fontSize: 10, padding: '2px 6px' }}>Apply</button>
           </div>
         )}
+        {/* Per-iteration sample overrides (expandable) */}
+        {(function () {
+          var hasMultiSample = iterations.some(function (it) {
+            var mv2 = metricValues[it.iterationId];
+            return mv2 && mv2.sampleValues && mv2.sampleValues.length > 1;
+          });
+          if (!hasMultiSample) return null;
+          var currentIndices = typeof sm.sampleIndex === 'object' && sm.sampleIndex ? sm.sampleIndex : {};
+          var bestIndices = computeBestSampleIndices();
+          var hasOverride = iterations.some(function (it) {
+            return currentIndices[it.iterationId] != null && currentIndices[it.iterationId] !== bestIndices[it.iterationId];
+          });
+          return (
+            <details className="compare-sample-details">
+              <summary className="compare-sample-summary">
+                Per-iteration samples{hasOverride ? ' (customized)' : ''}
+              </summary>
+              <div className="compare-sample-list">
+                {iterations.map(function (it) {
+                  var mv2 = metricValues[it.iterationId];
+                  if (!mv2 || !mv2.sampleValues || mv2.sampleValues.length <= 1) return null;
+                  var currentIdx = currentIndices[it.iterationId] != null ? currentIndices[it.iterationId] : (bestIndices[it.iterationId] || 0);
+                  var label = buildIterLabel(it, charts.length > 0 ? charts[0].varyingKeys : new Set(), new Set());
+                  return (
+                    <div key={it.iterationId} className="compare-sample-row">
+                      <span className="compare-sample-iter-label" title={it.iterationId}>{label || it.iterationId.substring(0, 8)}</span>
+                      <select className="compare-breakout-select" value={currentIdx} onChange={function (e) { handleSampleChange(si, e.target.value, it.iterationId); }}>
+                        {mv2.sampleValues.map(function (pmv, idx2) {
+                          var slabel = 'Sample ' + (idx2 + 1);
+                          if (pmv != null) slabel += ' (' + formatValue(pmv) + ')';
+                          if (idx2 === (bestIndices[it.iterationId] || 0)) slabel += ' *';
+                          return <option key={idx2} value={idx2}>{slabel}</option>;
+                        })}
+                      </select>
+                    </div>
+                  );
+                })}
+              </div>
+            </details>
+          );
+        })()}
       </div>
     );
   }
@@ -1809,19 +1876,19 @@ const CompareView = forwardRef(function CompareView({ selected, groupByList, set
                 <div className="compare-primary-controls">
                   <button className="btn btn-sm btn-secondary" onClick={function () {
                     var ctx = getRunContext();
-                    var bestIdx = computeBestSampleIndex();
+                    var bestIndices = computeBestSampleIndices();
                     setAddMetricLoading(true);
                     timeWork('Add primary metric refinement ' + pmStr, function () {
                       return api.getSupplementalMetric({
                         iterations: ctx.iterations, start: ctx.start, end: ctx.end,
-                        source: pmParts[0], type: pmParts[1], sampleIndex: bestIdx,
+                        source: pmParts[0], type: pmParts[1], sampleIndex: bestIndices,
                       });
                     }).then(function (res) {
                       setSupplementalMetrics(function (prev) {
                         return prev.concat([{
                           source: pmParts[0], type: pmParts[1],
                           values: res.values || {}, display: 'panel',
-                          chartType: 'bar', filter: '', sampleIndex: bestIdx,
+                          chartType: 'bar', filter: '', sampleIndex: bestIndices,
                           breakouts: [], remainingBreakouts: res.remainingBreakouts || [],
                           loading: false,
                         }]);

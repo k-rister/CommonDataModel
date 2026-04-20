@@ -1128,7 +1128,9 @@ app.post('/api/v1/iterations/supplemental-metric', async (req, res) => {
     const { runIds, iterations: reqIterations, start, end, source, type, breakout, filter, sampleIndex } = req.body;
     var breakoutArr = Array.isArray(breakout) ? breakout : [];
     var filterVal = filter || null;
+    // sampleIndex can be a number (same for all iterations) or an object { iterationId: index }
     var requestedSampleIdx = (typeof sampleIndex === 'number') ? sampleIndex : null;
+    var perIterSampleIdx = (typeof sampleIndex === 'object' && sampleIndex !== null && !Array.isArray(sampleIndex)) ? sampleIndex : null;
     if (!source || !type) {
       return res.status(400).json({ code: 'MISSING_PARAMS', error: 'source and type are required' });
     }
@@ -1208,8 +1210,14 @@ app.post('/api/v1/iterations/supplemental-metric', async (req, res) => {
         var iterRanges = (periodRanges[i]) || [];
         if (iterPeriodIds.length === 0) continue;
 
-        // Use requested sample index, defaulting to 0
-        var selIdx = (requestedSampleIdx !== null && requestedSampleIdx < iterPeriodIds.length) ? requestedSampleIdx : 0;
+        // Use per-iteration sample index if available, otherwise global, otherwise 0
+        var selIdx = 0;
+        if (perIterSampleIdx && perIterSampleIdx[allIterIds[i]] != null) {
+          selIdx = perIterSampleIdx[allIterIds[i]];
+        } else if (requestedSampleIdx !== null) {
+          selIdx = requestedSampleIdx;
+        }
+        if (selIdx >= iterPeriodIds.length) selIdx = 0;
 
         if (!iterPeriodIds[selIdx]) continue;
         var range = iterRanges[selIdx];
