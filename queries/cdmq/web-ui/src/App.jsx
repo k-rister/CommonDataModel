@@ -3,6 +3,7 @@ import SearchPanel from './components/SearchPanel';
 import SelectionBar from './components/SelectionBar';
 import IterationTable from './components/IterationTable';
 import CompareView from './components/CompareView';
+import DeepDiveView from './components/DeepDiveView';
 import DebugConsole from './components/DebugConsole';
 import './index.css';
 
@@ -67,6 +68,8 @@ export default function App() {
   const lastFilters = useRef(null);
   const restoredState = useRef(null);
   const [restoredMetrics, setRestoredMetrics] = useState(null);
+  const [deepDiveMetrics, setDeepDiveMetrics] = useState(new Set());  // Set of "source::type" strings
+  const [deepDiveConfigs, setDeepDiveConfigs] = useState([]);  // snapshot of supplemental metrics for deep dive
 
   // On mount, check for state in URL hash
   // Don't switch view yet — wait until search completes and selections are applied
@@ -207,10 +210,16 @@ export default function App() {
           </button>
           <button
             className={view === 'deepdive' ? 'active' : ''}
-            onClick={() => setView('deepdive')}
-            disabled={selected.size === 0}
+            onClick={() => {
+              // Snapshot supplemental metric configs before CompareView unmounts
+              if (compareRef.current) {
+                setDeepDiveConfigs(compareRef.current.getSupplementalMetrics() || []);
+              }
+              setView('deepdive');
+            }}
+            disabled={selected.size === 0 || deepDiveMetrics.size === 0}
           >
-            Deep Dive
+            Deep Dive{deepDiveMetrics.size > 0 ? ' (' + deepDiveMetrics.size + ')' : ''}
           </button>
         </nav>
         </div>
@@ -246,11 +255,11 @@ export default function App() {
       )}
 
       {view === 'compare' && (
-        <CompareView ref={compareRef} selected={selected} groupByList={groupByList} setGroupByList={setGroupByList} hiddenFields={hiddenFields} setHiddenFields={setHiddenFields} restoredMetrics={restoredMetrics} />
+        <CompareView ref={compareRef} selected={selected} groupByList={groupByList} setGroupByList={setGroupByList} hiddenFields={hiddenFields} setHiddenFields={setHiddenFields} restoredMetrics={restoredMetrics} deepDiveMetrics={deepDiveMetrics} setDeepDiveMetrics={setDeepDiveMetrics} />
       )}
 
       {view === 'deepdive' && (
-        <div className="empty-msg">Phase 3: Time-series deep dive coming soon.</div>
+        <DeepDiveView selected={selected} deepDiveMetrics={deepDiveMetrics} metricConfigs={deepDiveConfigs} />
       )}
 
       <DebugConsole />

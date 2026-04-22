@@ -20,16 +20,30 @@ try {
 var logFile = logDir + '/cdm-server.log';
 var logStream = fs.createWriteStream(logFile, { flags: 'a' });
 
-function serverLog(msg) {
-  var line = '[' + new Date().toISOString() + '] ' + msg;
+function serverLog(msg, reqId) {
+  var prefix = '[' + new Date().toISOString() + ']';
+  if (reqId) prefix += ' [' + reqId + ']';
+  var line = prefix + ' ' + msg;
   console.log(line);
   logStream.write(line + '\n');
 }
 
-function serverError(msg) {
-  var line = '[' + new Date().toISOString() + '] ERROR: ' + msg;
+function serverError(msg, reqId) {
+  var prefix = '[' + new Date().toISOString() + ']';
+  if (reqId) prefix += ' [' + reqId + ']';
+  var line = prefix + ' ERROR: ' + msg;
   console.error(line);
   logStream.write(line + '\n');
+}
+
+// Per-client request counter for generating short session-like IDs
+var clientCounters = {};
+function generateReqId(req) {
+  var ip = req.ip || req.connection.remoteAddress || 'unknown';
+  var shortIp = ip.replace(/^.*:/, ''); // last part of IPv6 or IPv4
+  if (!clientCounters[shortIp]) clientCounters[shortIp] = 0;
+  clientCounters[shortIp]++;
+  return shortIp + '-' + clientCounters[shortIp];
 }
 
 function save_host(host) {
@@ -86,6 +100,12 @@ serverLog('Instance info after discovery: ' + JSON.stringify(instances, null, 2)
 
 app.use(cors());
 app.use(express.json());
+
+// Assign a request ID to each request for log correlation
+app.use(function (req, res, next) {
+  req.reqId = generateReqId(req);
+  next();
+});
 
 // --------------------------------------------------------------------------------------------------------------
 // Middleware: resolve a run ID to an OpenSearch instance and yearDotMonth
@@ -1123,6 +1143,96 @@ app.post('/api/v1/iterations/breakout-values', async (req, res) => {
 // Returns: { values: { iterationId: { labels: { label: { mean, stddevPct, sampleValues } }, remainingBreakouts: [...] } } }
 // When breakout is empty, returns a single label "__all__" with the aggregated value.
 // --------------------------------------------------------------------------------------------------------------
+// POST /api/v1/iterations/period-info — get period IDs and time ranges per iteration
+// Body: { iterations: [{iterationId, runId}], start, end, sampleIndex }
+// Returns: { periods: { iterationId: { periodId, begin, end, runId } } }
+// --------------------------------------------------------------------------------------------------------------
+app.post('/api/v1/iterations/period-info', async (req, res) => {
+  try {
+    const { iterations: reqIterations, start, end, sampleIndex } = req.body;
+    if (!Array.isArray(reqIterations) || reqIterations.length === 0) {
+      return res.status(400).json({ code: 'MISSING_PARAMS', error: 'iterations array is required' });
+    }
+    var requestedSampleIdx = (typeof sampleIndex === 'number') ? sampleIndex : null;
+    var perIterSampleIdx = (typeof sampleIndex === 'object' && sampleIndex !== null && !Array.isArray(sampleIndex)) ? sampleIndex : null;
+
+    getInstancesInfo(instances);
+    var result = {};
+
+    for (const inst of instances) {
+      if (invalidInstance(inst)) continue;
+      var ydm = cdm.buildYearDotMonthRange(inst, 'run', start || null, end || null);
+
+      var allIterIds = reqIterations.map(function (it) { return it.iterationId; });
+      var iterRunIds = reqIterations.map(function (it) { return it.runId; });
+
+      var samples = await cdm.mgetSamples(inst, allIterIds, ydm);
+      var statuses = await cdm.mgetSampleStatuses(inst, samples || [], ydm);
+      if (typeof statuses === 'undefined') statuses = [];
+      var periodNames = await cdm.mgetPrimaryPeriodName(inst, allIterIds, ydm);
+
+      var passingSamplesByIter = [];
+      var passingPeriodNamesByIter = [];
+      for (var i = 0; i < allIterIds.length; i++) {
+        var iterSamples = (samples && samples[i]) || [];
+        var iterStatuses = (statuses && statuses[i]) || [];
+        var iterPeriodName = (periodNames && periodNames[i]) || null;
+        var passing = [];
+        for (var s = 0; s < iterSamples.length; s++) {
+          if (iterStatuses[s] === 'pass') passing.push(iterSamples[s]);
+        }
+        passingSamplesByIter.push(passing);
+        passingPeriodNamesByIter.push(iterPeriodName);
+      }
+
+      var primaryPeriodIds = [];
+      var hasPassing = passingSamplesByIter.some(function (s) { return s.length > 0; });
+      if (hasPassing) {
+        primaryPeriodIds = await cdm.mgetPrimaryPeriodId(inst, passingSamplesByIter, passingPeriodNamesByIter, ydm);
+        if (typeof primaryPeriodIds === 'undefined') primaryPeriodIds = [];
+      }
+
+      var periodRanges = [];
+      if (primaryPeriodIds.length > 0) {
+        periodRanges = await cdm.mgetPeriodRange(inst, primaryPeriodIds, ydm);
+        if (typeof periodRanges === 'undefined') periodRanges = [];
+      }
+
+      for (var i = 0; i < allIterIds.length; i++) {
+        var iterPeriodIds = (primaryPeriodIds[i]) || [];
+        var iterRanges = (periodRanges[i]) || [];
+        if (iterPeriodIds.length === 0) continue;
+
+        var selIdx = 0;
+        if (perIterSampleIdx && perIterSampleIdx[allIterIds[i]] != null) {
+          selIdx = perIterSampleIdx[allIterIds[i]];
+        } else if (requestedSampleIdx !== null) {
+          selIdx = requestedSampleIdx;
+        }
+        if (selIdx >= iterPeriodIds.length) selIdx = 0;
+
+        if (!iterPeriodIds[selIdx]) continue;
+        var range = iterRanges[selIdx];
+        if (!range || !range.begin || !range.end) continue;
+
+        result[allIterIds[i]] = {
+          periodId: iterPeriodIds[selIdx],
+          begin: range.begin,
+          end: range.end,
+          runId: iterRunIds[i],
+        };
+      }
+    }
+
+    serverLog('POST /api/v1/iterations/period-info: ' + Object.keys(result).length + ' period(s)');
+    res.json({ periods: result });
+  } catch (error) {
+    serverError('Error in POST /api/v1/iterations/period-info: ' + error);
+    res.status(500).json({ code: 'INTERNAL_ERROR', error: 'Failed to get period info: ' + error.message });
+  }
+});
+
+// --------------------------------------------------------------------------------------------------------------
 app.post('/api/v1/iterations/supplemental-metric', async (req, res) => {
   try {
     const { runIds, iterations: reqIterations, start, end, source, type, breakout, filter, sampleIndex } = req.body;
@@ -1448,18 +1558,10 @@ app.post('/api/v1/metric-data', async (req, res) => {
   try {
     var { run, period, begin, end, source, type, resolution, breakout, filter, instances: reqInstances } = req.body;
 
-    serverLog('[' + Date.now() + '] Fetching metric data with parameters:', {
-      run,
-      period,
-      begin,
-      end,
-      source,
-      type,
-      resolution,
-      breakout,
-      filter,
-      instances: reqInstances ? `${reqInstances.length} instance(s) provided` : 'using server instances'
-    });
+    var reqStart = Date.now();
+    var breakoutStr = Array.isArray(breakout) ? breakout.join(',') : (breakout || 'none');
+    serverLog('POST /api/v1/metric-data: ' + source + '::' + type + ' resolution=' + resolution + ' breakout=[' + breakoutStr + ']' + (filter ? ' filter=' + filter : '') + ' run=' + (run || 'none').toString().substring(0, 8) + '... period=' + (period || 'none').toString().substring(0, 8) + '...', req.reqId);
+    serverLog('  curl: curl -s -X POST http://localhost:3000/api/v1/metric-data -H "Content-Type: application/json" -d \'' + JSON.stringify({ run: run, period: period, begin: begin, end: end, source: source, type: type, resolution: resolution, breakout: breakout, filter: filter }) + '\'', req.reqId);
 
     // Use instances from request if provided, otherwise use server's configured instances
     var instancesToUse = reqInstances && reqInstances.length > 0 ? reqInstances : instances;
@@ -1537,15 +1639,9 @@ app.post('/api/v1/metric-data', async (req, res) => {
     }
     metric_data = resp['data-sets'][0];
 
-    console.log(
-      '[' +
-        Date.now() +
-        '] Request completed from Opensearch instance: ' +
-        instance['host'] +
-        ' and cdm: ' +
-        instance['ver'] +
-        '\n'
-    );
+    var labelCount = metric_data && metric_data.values ? Object.keys(metric_data.values).length : 0;
+    var elapsed = Date.now() - reqStart;
+    serverLog('POST /api/v1/metric-data: ' + source + '::' + type + ' -> ' + labelCount + ' label(s) in ' + elapsed + 'ms', req.reqId);
 
     // Return the data
     res.json(metric_data);

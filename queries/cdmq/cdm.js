@@ -396,6 +396,7 @@ indexDefs['v9dev']['metric_data'] = deepClone(indexDefs['v8dev']['metric_data'])
 
 // --------------------------------------------------------------------------------------------------------------
 function memUsage() {
+  if (debugOut == 0) return;
   const memUsage = process.memoryUsage();
   debuglog({
     rss: `${Math.round(memUsage.rss / 1024 / 1024)} MB`, // Resident Set Size
@@ -408,6 +409,7 @@ exports.memUsage = memUsage;
 
 // --------------------------------------------------------------------------------------------------------------
 function numMBytes(a, str) {
+  if (debugOut == 0) return 0; // skip expensive computation when debug is off
   var totalBytes = 0;
   a.forEach((element) => {
     totalBytes += JSON.stringify(element).length;
@@ -673,22 +675,29 @@ async function fetchBatchedData(instance, reqs, batchSize = 16) {
     //debuglog('fetchBatchedData() processing batch');
     const promises = batch.map(async (req) => {
       try {
-        // thenRequest will abolutely *not* work unless this header is converted to string and back
-        const headerStr = JSON.stringify(instance['header']);
-        const hdrs = JSON.parse(headerStr);
-        //debuglog('fetchBatchedData() calling thenRequest()');
-        const response = await thenRequest('POST', req.url, { body: req.body, headers: hdrs });
-        //debuglog('fetchBatchedData() returned from thenRequest()');
-        if (response.statusCode >= 200 && response.statusCode < 300) {
+        var osReqStart = Date.now();
+        var bodyLen = req.body ? req.body.length : 0;
+        console.log('[' + new Date().toISOString() + '] [OS-REQ] POST ' + req.url + ' (' + bodyLen + ' bytes)');
+        if (process.env.CDM_LOG_OS_CURL) {
+          var curlBody = req.body.replace(/'/g, "'\\''");
+          console.log('[' + new Date().toISOString() + '] [OS-CURL] curl -s -X POST "' + req.url + '" -H "Content-Type: application/json" -d $\'' + curlBody + '\'');
+        }
+        // Use native fetch instead of then-request (which spawns child processes via sync-rpc)
+        const response = await fetch(req.url, {
+          method: 'POST',
+          body: req.body,
+          headers: { 'Content-Type': 'application/json' },
+        });
+        var osElapsed = Date.now() - osReqStart;
+        console.log('[' + new Date().toISOString() + '] [OS-RESP] POST ' + req.url + ' status=' + response.status + ' in ' + osElapsed + 'ms');
+        if (response.ok) {
           try {
-            //debuglog('fetchBatchedData() about to return with JSON.parse');
-            return JSON.parse(response.getBody('utf8')); // Attempt JSON parsing
+            return await response.json();
           } catch (jsonError) {
-            //debuglog('fetchBatchedData() about to return with JSON(no-parse)');
-            return response.getBody('utf8'); // return text if JSON parsing fails
+            return await response.text();
           }
         } else {
-          throw new Error(`HTTP error! status: ${response.statusCode}`);
+          throw new Error(`HTTP error! status: ${response.status}`);
         }
       } catch (error) {
         console.error(`Error fetching ${req}:`, error);
@@ -750,7 +759,10 @@ esJsonArrRequest = async function (instance, docType, action, jsonArr, yearDotMo
       url = 'http://' + instance['host'] + '/' + indexName + action;
     }
   }
-  var max = 16384;
+  // Larger chunks = fewer HTTP round-trips to OpenSearch.
+  // _msearch can handle multi-MB bodies; 16KB was overly conservative
+  // and caused hundreds of small HTTP requests that bottleneck on connection limits.
+  var max = 262144; // 256KB
   var idx = 0;
   var req_count = 0;
   var q_count = 0;
@@ -794,11 +806,20 @@ esJsonArrRequest = async function (instance, docType, action, jsonArr, yearDotMo
       reqs.push(req);
     }
 
-    debuglog('esJsonArrRequest reqs.length:\n' + reqs.length);
-    // Scale down fetch concurrency for multi-index queries to avoid
-    // overwhelming OpenSearch's search thread pool queue (capacity ~1000).
-    // Each concurrent batch generates numIndices * queriesPerBatch shard queries.
-    var batchSize = numIndices > 1 ? Math.max(1, Math.floor(16 / numIndices)) : 16;
+    var totalSubQueries = jsonArr.length / 2;
+    // Scale concurrency based on request count and size to avoid overwhelming
+    // OpenSearch's search thread pool. Large requests (many sub-queries packed
+    // in 256KB chunks) should use lower concurrency than small ones.
+    var batchSize;
+    if (numIndices > 1) {
+      batchSize = Math.max(1, Math.floor(4 / numIndices));
+    } else if (reqs.length > 16 || (reqs.length > 0 && reqs[0].body.length > 100000)) {
+      // Large request bodies or many requests — limit concurrency
+      batchSize = 4;
+    } else {
+      batchSize = 16;
+    }
+    console.log('[' + new Date().toISOString() + '] [OS-BATCH] ' + reqs.length + ' _msearch request(s), ' + totalSubQueries + ' sub-queries, batchSize=' + batchSize);
     var responses = await fetchBatchedData(instance, reqs, batchSize);
     reqs = [];
 
@@ -2898,8 +2919,13 @@ getMetricGroupsFromBreakouts = async function (instance, sets, yearDotMonth) {
     q.aggs = aggs;
     jsonArr.push(JSON.stringify(index));
     jsonArr.push(JSON.stringify(q));
+    // Log the metric_desc query as curl for debugging
+    var indexName = getIndexName('metric_desc', instance, yearDotMonth);
+    console.log('[' + new Date().toISOString() + '] [OS-METRIC-DESC] curl -s -X POST "http://' + instance['host'] + '/' + indexName + '/_search" -H "Content-Type: application/json" -d \'' + JSON.stringify(q) + '\'');
   });
+  var mdStart = Date.now();
   var responses = await esJsonArrRequest(instance, 'metric_desc', '/_msearch', jsonArr, yearDotMonth);
+  console.log('[' + new Date().toISOString() + '] [OS-METRIC-DESC] ' + (jsonArr.length / 2) + ' query(ies) completed in ' + (Date.now() - mdStart) + 'ms');
 
   var metricGroupIdsByLabelSets = [];
   var metricGroupTermsSets = [];
@@ -2998,95 +3024,67 @@ sendMetricReq = async function (
 
   const metricIdsArrayStr = buildMetricIdsArray(metricIds);
 
+  // Pre-build query templates with placeholders for timestamps.
+  // The metric UUID terms filter is the bulk of each query (~1KB+ for 36 UUIDs)
+  // and is identical across all 100+ time windows. Building it once and inserting
+  // only the timestamps avoids ~100x redundant string construction.
+  const indexjson = '{"index": "' + indexName + '" }';
+  const q1Prefix = '{"size":0,"query":{"bool":{"filter":[{"range":{"metric_data.end":{"lte":"';
+  const q1Mid = '"}}},{"range":{"metric_data.begin":{"gte":"';
+  const q1Suffix = '"}}},{"terms":{"metric_desc.metric_desc-uuid":' + metricIdsArrayStr + '}}]}},"aggs":{"metric_avg":{"weighted_avg":{"value":{"field":"metric_data.value"},"weight":{"field":"metric_data.duration"}}}}}';
+  const q2Prefix = '{"size":0,"query":{"bool":{"filter":[{"range":{"metric_data.end":{"lte":"';
+  const q2Mid = '"}}},{"range":{"metric_data.begin":{"gte":"';
+  const q2Suffix = '"}}},{"terms":{"metric_desc.metric_desc-uuid":' + metricIdsArrayStr + '}}]}},"aggs":{"total_weight":{"sum":{"field":"metric_data.duration"}}}}';
+
+  // Pre-build boundary query templates per chunk of metricIds
+  const chunkSize = 10000;
+  const boundaryTemplates = [];
+  for (let i = 0; i < metricIds.length; i += chunkSize) {
+    const slicedMetricIdsStr = buildMetricIdsArray(metricIds.slice(i, i + chunkSize));
+    boundaryTemplates.push({
+      q3Prefix: '{"size":' + bigQuerySize + ',"_source":["metric_data.begin","metric_data.end","metric_data.value"],"query":{"bool":{"filter":[{"range":{"metric_data.end":{"gt":"',
+      q3Mid: '"}}},{"range":{"metric_data.begin":{"lte":"',
+      q3Suffix: '"}}},{"terms":{"metric_desc.metric_desc-uuid":' + slicedMetricIdsStr + '}}]}}}',
+      q4Prefix: '{"size":' + bigQuerySize + ',"_source":["metric_data.begin","metric_data.end","metric_data.value"],"query":{"bool":{"filter":[{"range":{"metric_data.end":{"gte":',
+      q4Mid: '}}},{"range":{"metric_data.begin":{"lt":',
+      q4Suffix: '}}},{"terms":{"metric_desc.metric_desc-uuid":' + slicedMetricIdsStr + '}}]}}}',
+    });
+  }
+
   while (true) {
-    const indexjson = '{"index": "' + indexName + '" }';
+    var wi = jsonArr._writeIdx;
+    var ti = jsonArrTracker._writeIdx;
 
     // Request 1: Weighted average for documents fully within range
-    let reqjson =
-      '{"size":0,"query":{"bool":{"filter":[' +
-      '{"range":{"metric_data.end":{"lte":"' +
-      thisEnd +
-      '"}}},' +
-      '{"range":{"metric_data.begin":{"gte":"' +
-      thisBegin +
-      '"}}},' +
-      '{"terms":{"metric_desc.metric_desc-uuid":' +
-      metricIdsArrayStr +
-      '}}' +
-      ']}},"aggs":{"metric_avg":{"weighted_avg":{"value":{"field":"metric_data.value"},' +
-      '"weight":{"field":"metric_data.duration"}}}}}';
-
-    jsonArr.push(indexjson, reqjson);
-    jsonArrTracker.push({ label, set, begin: thisBegin, end: thisEnd, numMetricIds: metricIds.length });
+    let reqjson = q1Prefix + thisEnd + q1Mid + thisBegin + q1Suffix;
+    jsonArr[wi] = indexjson; jsonArr[wi + 1] = reqjson; wi += 2;
+    jsonArrTracker[ti] = { label, set, begin: thisBegin, end: thisEnd, numMetricIds: metricIds.length }; ti++;
     jsonArrEstimatedBytes += (indexjson.length + reqjson.length) * 2;
 
     // Request 2: Total weight
-    reqjson =
-      '{"size":0,"query":{"bool":{"filter":[' +
-      '{"range":{"metric_data.end":{"lte":"' +
-      thisEnd +
-      '"}}},' +
-      '{"range":{"metric_data.begin":{"gte":"' +
-      thisBegin +
-      '"}}},' +
-      '{"terms":{"metric_desc.metric_desc-uuid":' +
-      metricIdsArrayStr +
-      '}}' +
-      ']}},"aggs":{"total_weight":{"sum":{"field":"metric_data.duration"}}}}';
-
-    jsonArr.push(indexjson, reqjson);
-    jsonArrTracker.push({});
+    reqjson = q2Prefix + thisEnd + q2Mid + thisBegin + q2Suffix;
+    jsonArr[wi] = indexjson; jsonArr[wi + 1] = reqjson; wi += 2;
+    jsonArrTracker[ti] = {}; ti++;
     jsonArrEstimatedBytes += (indexjson.length + reqjson.length) * 2;
 
-    // Requests 3 & 4: Documents partially outside range (chunked by 10k metricIds)
-    const chunkSize = 10000;
-    for (let i = 0; i < metricIds.length; i += chunkSize) {
-      const slicedMetricIds = metricIds.slice(i, i + chunkSize);
-      const slicedMetricIdsStr = buildMetricIdsArray(slicedMetricIds);
-
+    // Requests 3 & 4: Documents partially outside range
+    for (let bt = 0; bt < boundaryTemplates.length; bt++) {
+      const t = boundaryTemplates[bt];
       // Request 3: End after range
-      reqjson =
-        '{"size":' +
-        bigQuerySize +
-        ',"_source":["metric_data.begin","metric_data.end","metric_data.value"],' +
-        '"query":{"bool":{"filter":[' +
-        '{"range":{"metric_data.end":{"gt":"' +
-        thisEnd +
-        '"}}},' +
-        '{"range":{"metric_data.begin":{"lte":"' +
-        thisEnd +
-        '"}}},' +
-        '{"terms":{"metric_desc.metric_desc-uuid":' +
-        slicedMetricIdsStr +
-        '}}' +
-        ']}}}';
-
-      jsonArr.push(indexjson, reqjson);
-      jsonArrTracker.push({});
+      reqjson = t.q3Prefix + thisEnd + t.q3Mid + thisEnd + t.q3Suffix;
+      jsonArr[wi] = indexjson; jsonArr[wi + 1] = reqjson; wi += 2;
+      jsonArrTracker[ti] = {}; ti++;
       jsonArrEstimatedBytes += (indexjson.length + reqjson.length) * 2;
 
       // Request 4: Begin before range
-      reqjson =
-        '{"size":' +
-        bigQuerySize +
-        ',"_source":["metric_data.begin","metric_data.end","metric_data.value"],' +
-        '"query":{"bool":{"filter":[' +
-        '{"range":{"metric_data.end":{"gte":' +
-        thisBegin +
-        '}}},' +
-        '{"range":{"metric_data.begin":{"lt":' +
-        thisBegin +
-        '}}},' +
-        //'{"terms":{"metric_desc.metric_desc-uuid":' + JSON.stringify(slicedMetricIds) + '}}' +
-        '{"terms":{"metric_desc.metric_desc-uuid":' +
-        slicedMetricIdsStr +
-        '}}' +
-        ']}}}';
-
-      jsonArr.push(indexjson, reqjson);
-      jsonArrTracker.push({});
+      reqjson = t.q4Prefix + thisBegin + t.q4Mid + thisBegin + t.q4Suffix;
+      jsonArr[wi] = indexjson; jsonArr[wi + 1] = reqjson; wi += 2;
+      jsonArrTracker[ti] = {}; ti++;
       jsonArrEstimatedBytes += (indexjson.length + reqjson.length) * 2;
     }
+
+    jsonArr._writeIdx = wi;
+    jsonArrTracker._writeIdx = ti;
 
     debuglog('jsonArrTracker.length: ' + jsonArrTracker.length);
     debuglog('jsonArrTracker right before begin and end are updated: ' + JSON.stringify(jsonArrTracker, null, 2));
@@ -3103,9 +3101,16 @@ sendMetricReq = async function (
       debuglog('sendMetricReq jsonArr size MB: ' + numMBytes(jsonArr));
       debuglog('sendMetricReq responses size MB: ' + numMBytes(responses));
 
-      const theseResponses = await esJsonArrRequest(instance, 'metric_data', '/_msearch', jsonArr, yearDotMonth);
+      var esStart = Date.now();
+      // Trim the pre-allocated array to actual size before sending
+      var actualLen = jsonArr._writeIdx;
+      var sendArr = jsonArr.slice(0, actualLen);
+      console.log('[' + new Date().toISOString() + '] [PERF] sendMetricReq: submitting ' + actualLen + ' jsonArr entries (' + (jsonArrEstimatedBytes/1024/1024).toFixed(1) + 'MB) to esJsonArrRequest');
+      const theseResponses = await esJsonArrRequest(instance, 'metric_data', '/_msearch', sendArr, yearDotMonth);
+      console.log('[' + new Date().toISOString() + '] [PERF] sendMetricReq: esJsonArrRequest returned ' + theseResponses.length + ' responses in ' + (Date.now()-esStart) + 'ms');
       responses.push(...theseResponses);
-      jsonArr.length = 0;
+      jsonArr._writeIdx = 0;
+      jsonArrTracker._writeIdx = 0;
       jsonArrEstimatedBytes = 0;
 
       // Process responses
@@ -3113,6 +3118,7 @@ sendMetricReq = async function (
       debuglog('sendMetricReq jsonArrTracker:' + JSON.stringify(jsonArrTracker, null, 2));
       debuglog('jsonArrIdx:' + jsonArrIdx);
 
+      var calcStart = Date.now();
       while (jsonArrIdx < responses.length * 2) {
         const trackerIdx = jsonArrIdx / 2;
         const tracker = jsonArrTracker[trackerIdx];
@@ -3139,6 +3145,7 @@ sendMetricReq = async function (
           valueSets[setIdx][trackerLabel]
         );
       }
+      console.log('[' + new Date().toISOString() + '] [PERF] sendMetricReq: calcAvg processed responses in ' + (Date.now()-calcStart) + 'ms');
     }
 
     if (thisBegin > thisEnd) {
@@ -3280,55 +3287,117 @@ calcAvg = function (thisBegin, thisEnd, responses, jsonArrIdx, jsonArrTracker, n
 // metric_id in metricIds], and their respective (begin,end) are (0,500) and (501,2000),
 // then there are enough metric_data documents to compute the results.
 getMetricDataFromIdsSets = async function (instance, sets, metricGroupIdsByLabelSets, yearDotMonth) {
-  var jsonArr = []; // What is used to submit metric query requests in bulk
-  var jsonArrTracker = []; // Detailed Info (set, label, begin, end) about each element in jsonArr
-  var jsonArrIdx = 0; // Index of next element in jsonArr that needs its response processed
-  var responses = []; // Ordered responses for jsonArr
+  var responses = [];
   var valueSets = [];
-  var reqSize = 0;
-  var count = 0;
+  var jsonArrIdx = 0;
+  var totalLabels = 0;
+  var funcStart = Date.now();
   for (var idx = 0; idx < metricGroupIdsByLabelSets.length; idx++) {
+    totalLabels += Object.keys(metricGroupIdsByLabelSets[idx]).length;
+  }
+  var resolution = sets[0] ? Number(sets[0].resolution) : 1;
+  console.log('[' + new Date().toISOString() + '] [PERF] getMetricDataFromIdsSets: ' + metricGroupIdsByLabelSets.length + ' set(s), ' + totalLabels + ' label(s), resolution=' + resolution);
+
+  for (var idx = 0; idx < metricGroupIdsByLabelSets.length; idx++) {
+    var begin = Number(sets[idx].begin);
+    var end = Number(sets[idx].end);
+    var resolution = Number(sets[idx].resolution);
+    var duration = Math.floor((end - begin) / resolution);
+    const indexName = getIndexName('metric_data', instance, yearDotMonth);
+    const indexjson = '{"index": "' + indexName + '" }';
+
+    // Build time-range templates ONCE for all labels in this set.
+    // Each template has prefix/suffix pairs for the 4 query types,
+    // with __IDS__ as placeholder for the metric UUID list.
+    var timeRangeTemplates = [];
+    var thisBegin = begin;
+    var thisEnd = begin + duration;
+    while (true) {
+      timeRangeTemplates.push({
+        thisBegin: thisBegin,
+        thisEnd: thisEnd,
+        q1: '{"size":0,"query":{"bool":{"filter":[{"range":{"metric_data.end":{"lte":"' + thisEnd + '"}}},{"range":{"metric_data.begin":{"gte":"' + thisBegin + '"}}},{"terms":{"metric_desc.metric_desc-uuid":__IDS__}}]}},"aggs":{"metric_avg":{"weighted_avg":{"value":{"field":"metric_data.value"},"weight":{"field":"metric_data.duration"}}}}}',
+        q2: '{"size":0,"query":{"bool":{"filter":[{"range":{"metric_data.end":{"lte":"' + thisEnd + '"}}},{"range":{"metric_data.begin":{"gte":"' + thisBegin + '"}}},{"terms":{"metric_desc.metric_desc-uuid":__IDS__}}]}},"aggs":{"total_weight":{"sum":{"field":"metric_data.duration"}}}}',
+        q3: '{"size":' + bigQuerySize + ',"_source":["metric_data.begin","metric_data.end","metric_data.value"],"query":{"bool":{"filter":[{"range":{"metric_data.end":{"gt":"' + thisEnd + '"}}},{"range":{"metric_data.begin":{"lte":"' + thisEnd + '"}}},{"terms":{"metric_desc.metric_desc-uuid":__IDS__}}]}}}',
+        q4: '{"size":' + bigQuerySize + ',"_source":["metric_data.begin","metric_data.end","metric_data.value"],"query":{"bool":{"filter":[{"range":{"metric_data.end":{"gte":' + thisBegin + '}}},{"range":{"metric_data.begin":{"lt":' + thisBegin + '}}},{"terms":{"metric_desc.metric_desc-uuid":__IDS__}}]}}}',
+      });
+      thisBegin = thisEnd + 1;
+      thisEnd += duration + 1;
+      if (thisEnd > end) thisEnd = end;
+      if (thisBegin > thisEnd) break;
+    }
+    console.log('[' + new Date().toISOString() + '] [PERF] Built ' + timeRangeTemplates.length + ' time-range templates for set ' + idx);
+
     const sortedKeys = Object.keys(metricGroupIdsByLabelSets[idx]).sort();
+    var jsonArr = [];
+    var jsonArrTracker = [];
+    var flushLabelsEvery = 10; // Flush to OpenSearch every N labels
+
     for (var k = 0; k < sortedKeys.length; k++) {
       const label = sortedKeys[k];
-      debuglog('label: [' + label + ']');
       var metricIds = metricGroupIdsByLabelSets[idx][label];
-      if (isUndefined(sets[idx].begin)) {
-        console.log('ERROR: sets.[' + idx + '].begin is not defined:\n' + JSON.stringify(sets[idx]), null, 2);
-        process.exit(1);
-      }
-      var begin = Number(sets[idx].begin);
-      if (isNaN(begin)) {
-        console.log('ERROR: begin is not defined');
-        process.exit(1);
-      }
-      if (isUndefined(sets[idx].end)) {
-        console.log('ERROR: sets.[' + idx + '].end is not defined');
-        process.exit(1);
-      }
-      var end = Number(sets[idx].end);
-      var resolution = Number(sets[idx].resolution);
-      var duration = Math.floor((end - begin) / resolution);
+      var metricIdsStr = metricIds.length === 0 ? '[]' : '["' + metricIds.join('","') + '"]';
+      var labelStart = Date.now();
 
-      const lastPass = idx + 1 >= metricGroupIdsByLabelSets.length && k + 1 >= sortedKeys.length;
-      await sendMetricReq(
-        jsonArr,
-        jsonArrTracker,
-        jsonArrIdx,
-        responses,
-        valueSets,
-        idx,
-        label,
-        lastPass,
-        instance,
-        begin,
-        end,
-        resolution,
-        metricIds,
-        yearDotMonth
-      );
+      // For each time window, substitute the UUID list into the templates
+      for (var t = 0; t < timeRangeTemplates.length; t++) {
+        var tmpl = timeRangeTemplates[t];
+        jsonArr.push(indexjson, tmpl.q1.replace('__IDS__', metricIdsStr));
+        jsonArrTracker.push({ label: label, set: idx, begin: tmpl.thisBegin, end: tmpl.thisEnd, numMetricIds: metricIds.length });
+        jsonArr.push(indexjson, tmpl.q2.replace('__IDS__', metricIdsStr));
+        jsonArrTracker.push({});
+
+        // Boundary queries — chunk metricIds if > 10000
+        var chunkSize = 10000;
+        for (var ci = 0; ci < metricIds.length; ci += chunkSize) {
+          var slicedIdsStr = ci === 0 && metricIds.length <= chunkSize ? metricIdsStr : ('["' + metricIds.slice(ci, ci + chunkSize).join('","') + '"]');
+          jsonArr.push(indexjson, tmpl.q3.replace('__IDS__', slicedIdsStr));
+          jsonArrTracker.push({});
+          jsonArr.push(indexjson, tmpl.q4.replace('__IDS__', slicedIdsStr));
+          jsonArrTracker.push({});
+        }
+      }
+
+      const lastLabelInSet = k + 1 >= sortedKeys.length;
+      const lastPass = idx + 1 >= metricGroupIdsByLabelSets.length && lastLabelInSet;
+      var shouldFlush = lastLabelInSet || ((k + 1) % flushLabelsEvery === 0);
+
+      if (shouldFlush && jsonArr.length > 0) {
+        var esStart = Date.now();
+        console.log('[' + new Date().toISOString() + '] [PERF] Flushing ' + jsonArr.length + ' entries (' + (k+1) + '/' + sortedKeys.length + ' labels) to OpenSearch');
+        var theseResponses = await esJsonArrRequest(instance, 'metric_data', '/_msearch', jsonArr, yearDotMonth);
+        console.log('[' + new Date().toISOString() + '] [PERF] OpenSearch returned ' + theseResponses.length + ' responses in ' + (Date.now()-esStart) + 'ms');
+        responses.push(...theseResponses);
+
+        // Process responses
+        var calcStart = Date.now();
+        console.log('[' + new Date().toISOString() + '] [DEBUG] Before calcAvg loop: jsonArrIdx=' + jsonArrIdx + ', responses.length=' + responses.length + ', jsonArrTracker.length=' + jsonArrTracker.length);
+        while (jsonArrIdx < responses.length * 2) {
+          var trackerIdx = jsonArrIdx / 2;
+          var tracker = jsonArrTracker[trackerIdx];
+          if (!tracker || tracker.label === undefined) { jsonArrIdx += 2; continue; }
+          var setIdx = tracker.set;
+          var trackerLabel = tracker.label;
+          if (!valueSets[setIdx]) valueSets[setIdx] = {};
+          if (!valueSets[setIdx][trackerLabel]) valueSets[setIdx][trackerLabel] = [];
+          var prevIdx = jsonArrIdx;
+          jsonArrIdx = calcAvg(tracker.begin, tracker.end, responses, jsonArrIdx, jsonArrTracker, tracker.numMetricIds, valueSets[setIdx][trackerLabel]);
+          console.log('[' + new Date().toISOString() + '] [DEBUG] calcAvg: label="' + trackerLabel + '", set=' + setIdx + ', jsonArrIdx ' + prevIdx + '->' + jsonArrIdx + ', values=' + valueSets[setIdx][trackerLabel].length);
+        }
+        console.log('[' + new Date().toISOString() + '] [PERF] calcAvg in ' + (Date.now()-calcStart) + 'ms');
+
+        jsonArr = [];
+        jsonArrTracker = [];
+        responses = [];
+        jsonArrIdx = 0;
+      }
+
+      if (k === 0 || lastPass || (Date.now() - labelStart > 500)) {
+        console.log('[' + new Date().toISOString() + '] [PERF] label ' + (k+1) + '/' + sortedKeys.length + ' "' + label + '" took ' + (Date.now() - labelStart) + 'ms');
+      }
     }
   }
+  console.log('[' + new Date().toISOString() + '] [PERF] getMetricDataFromIdsSets total: ' + (Date.now()-funcStart) + 'ms, valueSets.length=' + valueSets.length + ', keys=' + valueSets.map(function(vs, i) { return i + ':' + (vs ? Object.keys(vs).join(',') : 'null'); }).join(' | '));
   return valueSets;
 };
 

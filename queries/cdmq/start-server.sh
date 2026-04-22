@@ -21,26 +21,42 @@ if ! command -v npm >/dev/null 2>&1; then
     popd >/dev/null
     exit 1
 fi
-echo "Resolving cdmq dependencies..."
-npm install --no-fund --no-audit 2>&1 | tail -1
+# Install dependencies only when package-lock.json is newer than last install
+if [ ! -f "node_modules/.install-stamp" ] || [ "package-lock.json" -nt "node_modules/.install-stamp" ]; then
+    echo "Installing cdmq dependencies..."
+    npm ci --no-fund --no-audit 2>&1 | tail -1
+    touch node_modules/.install-stamp
+else
+    echo "cdmq dependencies up to date"
+fi
 
 # Build the web UI if source exists
 if [ -d "web-ui" ] && [ -f "web-ui/package.json" ]; then
-    echo "Building web UI..."
     pushd web-ui >/dev/null
-    npm install --no-fund --no-audit 2>&1 | tail -1
-    node node_modules/.bin/vite build 2>&1
-    build_rc=$?
-    popd >/dev/null
-    if [ $build_rc -ne 0 ]; then
-        echo "Warning: web UI build failed (rc=$build_rc), server will start without UI"
-    else
-        echo "Web UI built successfully"
+    if [ ! -f "node_modules/.install-stamp" ] || [ "package-lock.json" -nt "node_modules/.install-stamp" ]; then
+        echo "Installing web UI dependencies..."
+        npm ci --no-fund --no-audit 2>&1 | tail -1
+        touch node_modules/.install-stamp
     fi
+    # Rebuild if any source file is newer than the dist
+    if [ ! -d "dist" ] || [ -n "$(find src -newer dist/index.html 2>/dev/null | head -1)" ] || [ "package-lock.json" -nt "dist/index.html" ]; then
+        echo "Building web UI..."
+        node node_modules/.bin/vite build 2>&1
+        build_rc=$?
+        if [ $build_rc -ne 0 ]; then
+            echo "Warning: web UI build failed (rc=$build_rc), server will start without UI"
+        else
+            echo "Web UI built successfully"
+        fi
+    else
+        echo "Web UI build up to date"
+    fi
+    popd >/dev/null
 fi
 
 while true; do
     echo "Starting server.js..."
+    #CDM_LOG_OS_CURL=1 node ./server.js "$@"
     node ./server.js "$@"
     rc=$?
     echo "server.js exited with rc=$rc, restarting..."
