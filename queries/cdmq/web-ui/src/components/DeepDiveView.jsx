@@ -1,5 +1,5 @@
-import { useState, useEffect, useMemo, useRef } from 'react';
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts';
+import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine } from 'recharts';
 import * as api from '../api/cdm';
 import { timeWork } from '../debugLog';
 
@@ -56,12 +56,32 @@ function buildIterShortLabel(it, allIterations) {
   return parts.join(', ') || it.iterationId.substring(0, 8);
 }
 
+// Parse breakout label like "<host1>-<0>" into segments ["host1", "0"]
+function parseSegments(label) {
+  if (!label) return [];
+  var matches = label.match(/<[^>]*>/g);
+  if (!matches) return [label];
+  return matches.map(function (s) { return s.replace(/^</, '').replace(/>$/, ''); });
+}
+
+// Natural sort
+function naturalCompare(a, b) {
+  var na = Number(a);
+  var nb = Number(b);
+  if (!isNaN(na) && !isNaN(nb)) return na - nb;
+  if (a < b) return -1;
+  if (a > b) return 1;
+  return 0;
+}
+
 export default function DeepDiveView({ selected, deepDiveMetrics, metricConfigs: metricConfigsProp }) {
   var [resolution, setResolution] = useState(100);
-  var [periodInfo, setPeriodInfo] = useState(null); // { iterationId: { periodId, begin, end, runId } }
-  var [metricData, setMetricData] = useState({}); // { "source::type": { iterationId: { values, breakouts } } }
+  var [periodInfo, setPeriodInfo] = useState(null);
+  var [metricData, setMetricData] = useState({});
   var [loadingPeriods, setLoadingPeriods] = useState(false);
-  var [loadingMetrics, setLoadingMetrics] = useState(new Set()); // Set of "source::type::iterationId" currently loading
+  var [loadingMetrics, setLoadingMetrics] = useState(new Set());
+  var [pinnedElapsed, setPinnedElapsed] = useState(null); // elapsed ms value for pinned (locked) time
+  var [hoverElapsed, setHoverElapsed] = useState(null); // elapsed ms value for live hover time
   var abortRef = useRef(false);
 
   var iterations = useMemo(function () {
@@ -282,6 +302,53 @@ export default function DeepDiveView({ selected, deepDiveMetrics, metricConfigs:
 
         var hasData = lineKeys.length > 0 && chartData.length > 0;
 
+        // Build legend data: group by iteration, then by breakout segments
+        var legendByIter = {};
+        lineKeys.forEach(function (lk) {
+          var itId = lk.iterationId;
+          if (!legendByIter[itId]) legendByIter[itId] = { iterLabel: '', items: [] };
+          // Extract breakout label from key (key = "iterLabel" or "iterLabel <breakoutLabel>")
+          var iterLabel = buildIterShortLabel(iterations.find(function (it) { return it.iterationId === itId; }), iterations);
+          legendByIter[itId].iterLabel = iterLabel;
+          var breakoutPart = lk.key.substring(iterLabel.length).trim();
+          var segments = breakoutPart ? parseSegments(breakoutPart) : [];
+          legendByIter[itId].items.push({ key: lk.key, segments: segments, color: lineColors[lk.key] });
+        });
+
+        // Sort items within each iteration by segments
+        Object.values(legendByIter).forEach(function (group) {
+          group.items.sort(function (a, b) {
+            for (var i = 0; i < Math.max(a.segments.length, b.segments.length); i++) {
+              var cmp = naturalCompare(a.segments[i] || '', b.segments[i] || '');
+              if (cmp !== 0) return cmp;
+            }
+            return 0;
+          });
+        });
+
+        // Get breakout dimension names from config
+        var config = configLookup[metricKey] || {};
+        var breakoutNames = (config.breakouts || []).map(function (b) {
+          var eqIdx = b.indexOf('=');
+          return eqIdx >= 0 ? b.substring(0, eqIdx) : b;
+        });
+
+        // Get active entry: find nearest data point to the shared elapsed time
+        var activeElapsed = pinnedElapsed != null ? pinnedElapsed : hoverElapsed;
+        var isPinned = pinnedElapsed != null;
+        var activeEntry = null;
+        if (activeElapsed != null && chartData.length > 0) {
+          // Binary-ish search for nearest elapsed time in this chart's data
+          var bestIdx = 0;
+          var bestDiff = Math.abs(chartData[0].elapsed - activeElapsed);
+          for (var ai = 1; ai < chartData.length; ai++) {
+            var diff = Math.abs(chartData[ai].elapsed - activeElapsed);
+            if (diff < bestDiff) { bestDiff = diff; bestIdx = ai; }
+            if (chartData[ai].elapsed > activeElapsed) break; // sorted, can stop early
+          }
+          activeEntry = chartData[bestIdx];
+        }
+
         return (
           <div key={metricKey} className="deepdive-chart-panel">
             <h3 className="deepdive-chart-title">{source}::{type}</h3>
@@ -293,56 +360,120 @@ export default function DeepDiveView({ selected, deepDiveMetrics, metricConfigs:
               </div>
             )}
             {hasData && (
-              <ResponsiveContainer width="100%" height={300}>
-                <LineChart data={chartData} margin={{ top: 10, right: 30, left: 60, bottom: 30 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
-                  <XAxis
-                    dataKey="elapsed"
-                    tickFormatter={formatElapsed}
-                    stroke="var(--border)"
-                    tick={{ fontSize: 11, fill: 'var(--text-secondary)' }}
-                    label={{ value: 'Elapsed Time', position: 'insideBottom', offset: -15, fontSize: 11, fill: 'var(--text-muted)' }}
-                  />
-                  <YAxis
-                    tick={{ fontSize: 11, fill: 'var(--text-secondary)' }}
-                    stroke="var(--border)"
-                  />
-                  <Tooltip
-                    content={function (props) {
-                      if (!props.active || !props.payload || props.payload.length === 0) return null;
-                      var entry = props.payload[0].payload;
+              <>
+                <ResponsiveContainer width="100%" height={300}>
+                  <LineChart data={chartData} margin={{ top: 10, right: 30, left: 60, bottom: 30 }}
+                    onMouseMove={function (e) {
+                      if (pinnedElapsed == null && e && e.activeTooltipIndex != null) {
+                        var entry = chartData[e.activeTooltipIndex];
+                        if (entry) setHoverElapsed(entry.elapsed);
+                      }
+                    }}
+                    onMouseLeave={function () {
+                      if (pinnedElapsed == null) setHoverElapsed(null);
+                    }}
+                    onClick={function (e) {
+                      if (e && e.activeTooltipIndex != null) {
+                        var entry = chartData[e.activeTooltipIndex];
+                        if (entry) {
+                          var clickedElapsed = entry.elapsed;
+                          setPinnedElapsed(function (prev) {
+                            if (prev != null) {
+                              setHoverElapsed(clickedElapsed);
+                              return null;
+                            }
+                            return clickedElapsed;
+                          });
+                        }
+                      }
+                    }}
+                  >
+                    <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
+                    <XAxis
+                      dataKey="elapsed"
+                      tickFormatter={formatElapsed}
+                      stroke="var(--border)"
+                      tick={{ fontSize: 11, fill: 'var(--text-secondary)' }}
+                      label={{ value: 'Elapsed Time', position: 'insideBottom', offset: -15, fontSize: 11, fill: 'var(--text-muted)' }}
+                    />
+                    <YAxis
+                      tick={{ fontSize: 11, fill: 'var(--text-secondary)' }}
+                      stroke="var(--border)"
+                    />
+                    <Tooltip
+                      content={function () { return <div style={{ display: 'none' }} />; }}
+                      cursor={{ stroke: 'var(--text-muted)', strokeWidth: 1, strokeDasharray: '3 3' }}
+                    />
+                    {activeEntry && (
+                      <ReferenceLine x={activeEntry.elapsed} stroke={isPinned ? '#ff6b6b' : 'var(--text-muted)'} strokeDasharray={isPinned ? '6 4' : '3 3'} strokeWidth={isPinned ? 2 : 1} />
+                    )}
+                    {lineKeys.map(function (lk) {
                       return (
-                        <div className="deepdive-tooltip">
-                          <div className="deepdive-tooltip-time">{formatElapsed(entry.elapsed)}</div>
-                          {lineKeys.map(function (lk) {
-                            var v = entry[lk.key];
-                            if (v == null) return null;
-                            return (
-                              <div key={lk.key} className="deepdive-tooltip-item" style={{ color: lineColors[lk.key] }}>
-                                {lk.label}: {formatValue(v)}
-                              </div>
-                            );
-                          })}
+                        <Line
+                          key={lk.key}
+                          dataKey={lk.key}
+                          type="monotone"
+                          stroke={lineColors[lk.key]}
+                          strokeWidth={1.5}
+                          dot={false}
+                          connectNulls={false}
+                          name={lk.label}
+                        />
+                      );
+                    })}
+                  </LineChart>
+                </ResponsiveContainer>
+
+                {/* Series legend table */}
+                <div className="deepdive-legend">
+                  <div className="deepdive-legend-header">
+                    {activeEntry ? (
+                      <span className="deepdive-legend-time">
+                        {isPinned ? '\u{1F512} ' : ''}{formatElapsed(activeEntry.elapsed)}
+                        {isPinned && <button className="deepdive-legend-unpin" onClick={function () { setPinnedElapsed(null); }}>&times;</button>}
+                      </span>
+                    ) : (
+                      <span className="deepdive-legend-hint">Move pointer over chart to see values</span>
+                    )}
+                  </div>
+                  <div className="deepdive-legend-body">
+                    {Object.keys(legendByIter).map(function (itId) {
+                      var group = legendByIter[itId];
+                      return (
+                        <div key={itId} className="deepdive-legend-group">
+                          <div className="deepdive-legend-iter">{group.iterLabel}</div>
+                          <table className="deepdive-legend-table">
+                            <thead>
+                              <tr>
+                                <th className="deepdive-legend-color-col"></th>
+                                {breakoutNames.map(function (name, ni) {
+                                  return <th key={ni}>{name}</th>;
+                                })}
+                                {breakoutNames.length === 0 && <th>Series</th>}
+                                <th className="deepdive-legend-value-col">Value</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {group.items.map(function (item) {
+                                var value = activeEntry ? activeEntry[item.key] : null;
+                                return (
+                                  <tr key={item.key}>
+                                    <td><span className="deepdive-legend-swatch" style={{ backgroundColor: item.color }}></span></td>
+                                    {item.segments.length > 0 ? item.segments.map(function (seg, si) {
+                                      return <td key={si} className="deepdive-legend-seg">{seg}</td>;
+                                    }) : <td className="deepdive-legend-seg">-</td>}
+                                    <td className="deepdive-legend-val">{value != null ? formatValue(value) : '-'}</td>
+                                  </tr>
+                                );
+                              })}
+                            </tbody>
+                          </table>
                         </div>
                       );
-                    }}
-                  />
-                  {lineKeys.map(function (lk) {
-                    return (
-                      <Line
-                        key={lk.key}
-                        dataKey={lk.key}
-                        type="monotone"
-                        stroke={lineColors[lk.key]}
-                        strokeWidth={2}
-                        dot={false}
-                        connectNulls={false}
-                        name={lk.label}
-                      />
-                    );
-                  })}
-                </LineChart>
-              </ResponsiveContainer>
+                    })}
+                  </div>
+                </div>
+              </>
             )}
           </div>
         );
