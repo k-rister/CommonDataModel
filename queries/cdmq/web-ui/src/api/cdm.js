@@ -140,6 +140,15 @@ export async function getBreakoutValues(params) {
   });
 }
 
+export async function getPeriodInfo(params) {
+  return request('POST', '/iterations/period-info', {
+    iterations: params.iterations,
+    start: params.start,
+    end: params.end,
+    sampleIndex: params.sampleIndex,
+  });
+}
+
 export async function getMetricData(params) {
   return request('POST', `/metric-data`, params);
 }

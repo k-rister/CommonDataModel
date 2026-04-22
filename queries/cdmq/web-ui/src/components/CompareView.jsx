@@ -492,7 +492,7 @@ function buildDimOptions(iterations) {
   return opts;
 }
 
-const CompareView = forwardRef(function CompareView({ selected, groupByList, setGroupByList, hiddenFields, setHiddenFields, restoredMetrics }, ref) {
+const CompareView = forwardRef(function CompareView({ selected, groupByList, setGroupByList, hiddenFields, setHiddenFields, restoredMetrics, deepDiveMetrics, setDeepDiveMetrics }, ref) {
   var [metricValues, setMetricValues] = useState({});
   var [loading, setLoading] = useState(false);
   var [supplementalMetrics, setSupplementalMetrics] = useState([]); // [{ source, type, values: {iterId: {mean,...}} }]
@@ -1286,6 +1286,21 @@ const CompareView = forwardRef(function CompareView({ selected, groupByList, set
               <button className="btn btn-sm btn-secondary" onClick={function () { handleApplyFilter(si); }} disabled={sm.loading} style={{ fontSize: 10, padding: '2px 6px' }}>Apply</button>
             )}
           </span>
+          {deepDiveMetrics && (function () {
+            var metricKey = sm.source + '::' + sm.type;
+            return (
+              <label className="compare-deepdive-check" title="Include in Deep Dive">
+                <input type="checkbox" checked={deepDiveMetrics.has(metricKey)} onChange={function () {
+                  setDeepDiveMetrics(function (prev) {
+                    var next = new Set(prev);
+                    if (next.has(metricKey)) next.delete(metricKey); else next.add(metricKey);
+                    return next;
+                  });
+                }} />
+                <span className="compare-deepdive-label">Dive</span>
+              </label>
+            );
+          })()}
           <button className="compare-metric-remove" onClick={function () { handleRemoveMetric(si); }}>&times;</button>
         </div>
         {sm.breakouts.length > 0 && (
@@ -1864,39 +1879,50 @@ const CompareView = forwardRef(function CompareView({ selected, groupByList, set
 
             {/* Primary metric controls */}
             {(function () {
-              // Get primary metric source/type from first iteration
               var pmStr = iterations.length > 0 ? iterations[0].primaryMetric : null;
               if (!pmStr || typeof pmStr !== 'string') return null;
               var pmParts = pmStr.split('::');
               if (pmParts.length < 2) return null;
-              // Check if primary metric is already added as supplemental
               var alreadyAdded = supplementalMetrics.some(function (m) { return m.source === pmParts[0] && m.type === pmParts[1]; });
-              if (alreadyAdded) return null;
               return (
                 <div className="compare-primary-controls">
-                  <button className="btn btn-sm btn-secondary" onClick={function () {
-                    var ctx = getRunContext();
-                    var bestIndices = computeBestSampleIndices();
-                    setAddMetricLoading(true);
-                    timeWork('Add primary metric refinement ' + pmStr, function () {
-                      return api.getSupplementalMetric({
-                        iterations: ctx.iterations, start: ctx.start, end: ctx.end,
-                        source: pmParts[0], type: pmParts[1], sampleIndex: bestIndices,
-                      });
-                    }).then(function (res) {
-                      setSupplementalMetrics(function (prev) {
-                        return prev.concat([{
-                          source: pmParts[0], type: pmParts[1],
-                          values: res.values || {}, display: 'panel',
-                          chartType: 'bar', filter: '', sampleIndex: bestIndices,
-                          breakouts: [], remainingBreakouts: res.remainingBreakouts || [],
-                          loading: false,
-                        }]);
-                      });
-                    }).finally(function () { setAddMetricLoading(false); });
-                  }}>
-                    Refine {pmStr}
-                  </button>
+                  {!alreadyAdded && (
+                    <button className="btn btn-sm btn-secondary" onClick={function () {
+                      var ctx = getRunContext();
+                      var bestIndices = computeBestSampleIndices();
+                      setAddMetricLoading(true);
+                      timeWork('Add primary metric refinement ' + pmStr, function () {
+                        return api.getSupplementalMetric({
+                          iterations: ctx.iterations, start: ctx.start, end: ctx.end,
+                          source: pmParts[0], type: pmParts[1], sampleIndex: bestIndices,
+                        });
+                      }).then(function (res) {
+                        setSupplementalMetrics(function (prev) {
+                          return prev.concat([{
+                            source: pmParts[0], type: pmParts[1],
+                            values: res.values || {}, display: 'panel',
+                            chartType: 'bar', filter: '', sampleIndex: bestIndices,
+                            breakouts: [], remainingBreakouts: res.remainingBreakouts || [],
+                            loading: false,
+                          }]);
+                        });
+                      }).finally(function () { setAddMetricLoading(false); });
+                    }}>
+                      Refine {pmStr}
+                    </button>
+                  )}
+                  {deepDiveMetrics && (
+                    <label className="compare-deepdive-check" title="Include in Deep Dive">
+                      <input type="checkbox" checked={deepDiveMetrics.has(pmStr)} onChange={function () {
+                        setDeepDiveMetrics(function (prev) {
+                          var next = new Set(prev);
+                          if (next.has(pmStr)) next.delete(pmStr); else next.add(pmStr);
+                          return next;
+                        });
+                      }} />
+                      <span className="compare-deepdive-label">Dive</span>
+                    </label>
+                  )}
                 </div>
               );
             })()}

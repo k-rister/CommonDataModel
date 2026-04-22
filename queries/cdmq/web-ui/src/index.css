@@ -1362,6 +1362,25 @@ a.run-id:hover {
   font-family: inherit;
 }
 
+.compare-deepdive-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  cursor: pointer;
+  font-size: 10px;
+  color: var(--text-muted);
+  margin-left: auto;
+}
+
+.compare-deepdive-check input[type="checkbox"] {
+  cursor: pointer;
+}
+
+.compare-deepdive-check:has(input:checked) .compare-deepdive-label {
+  color: var(--accent);
+  font-weight: 600;
+}
+
 .compare-metric-remove {
   background: none;
   border: none;
@@ -1369,7 +1388,6 @@ a.run-id:hover {
   font-size: 18px;
   color: var(--text-muted);
   line-height: 1;
-  margin-left: auto;
 }
 
 .compare-metric-remove:hover {
@@ -2014,4 +2032,167 @@ a.run-id:hover {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* Deep Dive View */
+.deepdive-view {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.deepdive-controls {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 8px 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.deepdive-chart-panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px;
+}
+
+.deepdive-chart-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 8px;
+}
+
+.deepdive-chart-loading {
+  padding: 24px;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.deepdive-tooltip {
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  padding: 8px 12px;
+  font-size: 12px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+}
+
+.deepdive-tooltip-time {
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 4px;
+}
+
+.deepdive-tooltip-hint {
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+/* Deep dive legend */
+.deepdive-legend {
+  margin-top: 8px;
+  border-top: 1px solid var(--border);
+  padding-top: 8px;
+}
+
+.deepdive-legend-header {
+  margin-bottom: 6px;
+  font-size: 12px;
+}
+
+.deepdive-legend-time {
+  font-weight: 600;
+  color: var(--accent);
+}
+
+.deepdive-legend-unpin {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 14px;
+  margin-left: 6px;
+  padding: 0 4px;
+}
+
+.deepdive-legend-unpin:hover {
+  color: var(--danger);
+}
+
+.deepdive-legend-hint {
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+.deepdive-legend-body {
+  max-height: 300px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.deepdive-legend-group {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 6px 8px;
+}
+
+.deepdive-legend-iter {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 4px;
+  font-family: 'SF Mono', ui-monospace, Consolas, monospace;
+}
+
+.deepdive-legend-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+}
+
+.deepdive-legend-table th {
+  text-align: left;
+  padding: 2px 6px;
+  color: var(--text-muted);
+  font-weight: 500;
+  font-size: 10px;
+  text-transform: uppercase;
+  border-bottom: 1px solid var(--border);
+}
+
+.deepdive-legend-table td {
+  padding: 1px 6px;
+}
+
+.deepdive-legend-color-col {
+  width: 16px;
+}
+
+.deepdive-legend-swatch {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+}
+
+.deepdive-legend-seg {
+  font-family: 'SF Mono', ui-monospace, Consolas, monospace;
+  color: var(--text-secondary);
+}
+
+.deepdive-legend-val {
+  font-family: 'SF Mono', ui-monospace, Consolas, monospace;
+  text-align: right;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.deepdive-legend-value-col {
+  text-align: right;
 }
