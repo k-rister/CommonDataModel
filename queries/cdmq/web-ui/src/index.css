@@ -1721,6 +1721,12 @@ a.run-id:hover {
   font-family: 'SF Mono', ui-monospace, Consolas, monospace;
 }
 
+.compare-sidebar-seg-sticky {
+  position: sticky;
+  top: 4px;
+  bottom: 4px;
+}
+
 .compare-sidebar-table-val {
   padding: 2px 4px;
   text-align: right;
@@ -2056,6 +2062,14 @@ a.run-id:hover {
   border: 1px solid var(--border);
   border-radius: var(--radius);
   padding: 16px;
+  user-select: none;
+}
+
+.deepdive-chart-panel svg,
+.deepdive-chart-panel svg *,
+.deepdive-chart-panel .recharts-surface,
+.deepdive-chart-panel .recharts-wrapper {
+  outline: none !important;
 }
 
 .deepdive-chart-title {
@@ -2184,6 +2198,21 @@ a.run-id:hover {
 .deepdive-legend-seg {
   font-family: 'SF Mono', ui-monospace, Consolas, monospace;
   color: var(--text-secondary);
+  border-right: 1px solid var(--border);
+  vertical-align: middle;
+}
+
+.deepdive-legend-seg[rowspan] {
+  font-weight: 600;
+  color: var(--text);
+  border-bottom: 1px solid var(--border);
+  position: relative;
+}
+
+.deepdive-legend-seg-sticky {
+  position: sticky;
+  top: 4px;
+  bottom: 4px;
 }
 
 .deepdive-legend-val {

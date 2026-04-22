@@ -450,7 +450,10 @@ function renderGroupedBreakouts(items, depth, breakoutNames) {
             <tr key={ri}>
               {row.segVals.map(function (sv, ci) {
                 if (rowSpans[ri][ci] === 0) return null;
-                return <td key={ci} rowSpan={rowSpans[ri][ci]} className="compare-sidebar-table-seg">{sv}</td>;
+                var span = rowSpans[ri][ci];
+                return <td key={ci} rowSpan={span} className="compare-sidebar-table-seg">
+                  {span > 1 ? <div className="compare-sidebar-seg-sticky">{sv}</div> : sv}
+                </td>;
               })}
               <td className="compare-sidebar-table-val" style={{ color: row.color }}>{row.value}</td>
             </tr>

@@ -370,7 +370,7 @@ export default function DeepDiveView({ selected, deepDiveMetrics, metricConfigs:
                       }
                     }}
                     onMouseLeave={function () {
-                      if (pinnedElapsed == null) setHoverElapsed(null);
+                      // Keep last hovered values visible when pointer leaves
                     }}
                     onClick={function (e) {
                       if (e && e.activeTooltipIndex != null) {
@@ -439,29 +439,105 @@ export default function DeepDiveView({ selected, deepDiveMetrics, metricConfigs:
                   <div className="deepdive-legend-body">
                     {Object.keys(legendByIter).map(function (itId) {
                       var group = legendByIter[itId];
+                      var items = group.items;
+                      var numCols = items.length > 0 && items[0].segments.length > 0 ? items[0].segments.length : 0;
+
+                      // Strip common prefix/suffix from each segment column
+                      var colStripped = [];
+                      for (var col = 0; col < numCols; col++) {
+                        var vals = items.map(function (it) { return it.segments[col] || ''; });
+                        var unique = Array.from(new Set(vals));
+                        var stripped = vals;
+                        if (unique.length > 1) {
+                          // Find common suffix (split at delimiter boundaries)
+                          var suffix = '';
+                          var first = unique[0];
+                          for (var si2 = first.length - 1; si2 > 0; si2--) {
+                            var ch = first[si2];
+                            if (ch === '.' || ch === '-' || ch === '_') {
+                              var candidate = first.substring(si2);
+                              if (unique.every(function (v) { return v.endsWith(candidate); })) {
+                                suffix = candidate;
+                              }
+                            }
+                          }
+                          if (suffix) {
+                            stripped = vals.map(function (v) { return v.substring(0, v.length - suffix.length); });
+                          } else {
+                            // Try common prefix
+                            var prefix = '';
+                            for (var pi = 0; pi < first.length - 1; pi++) {
+                              var pch = first[pi];
+                              if (pch === '.' || pch === '-' || pch === '_') {
+                                var pcandidate = first.substring(0, pi + 1);
+                                if (unique.every(function (v) { return v.startsWith(pcandidate); })) {
+                                  prefix = pcandidate;
+                                }
+                              }
+                            }
+                            if (prefix) {
+                              stripped = vals.map(function (v) { return v.substring(prefix.length); });
+                            }
+                          }
+                        }
+                        colStripped.push(stripped);
+                      }
+
+                      // Compute rowSpans for hierarchical grouping
+                      var rowSpans = items.map(function () { return new Array(numCols).fill(1); });
+                      for (var col2 = 0; col2 < numCols; col2++) {
+                        var spanStart = 0;
+                        for (var row = 1; row <= items.length; row++) {
+                          var same = row < items.length;
+                          if (same) {
+                            for (var c = 0; c <= col2; c++) {
+                              if ((colStripped[c] ? colStripped[c][row] : '') !== (colStripped[c] ? colStripped[c][spanStart] : '')) { same = false; break; }
+                            }
+                          }
+                          if (!same) {
+                            rowSpans[spanStart][col2] = row - spanStart;
+                            for (var r = spanStart + 1; r < row; r++) rowSpans[r][col2] = 0;
+                            spanStart = row;
+                          }
+                        }
+                      }
+
                       return (
                         <div key={itId} className="deepdive-legend-group">
                           <div className="deepdive-legend-iter">{group.iterLabel}</div>
                           <table className="deepdive-legend-table">
                             <thead>
                               <tr>
-                                <th className="deepdive-legend-color-col"></th>
                                 {breakoutNames.map(function (name, ni) {
                                   return <th key={ni}>{name}</th>;
                                 })}
                                 {breakoutNames.length === 0 && <th>Series</th>}
+                                <th className="deepdive-legend-color-col"></th>
                                 <th className="deepdive-legend-value-col">Value</th>
                               </tr>
                             </thead>
                             <tbody>
-                              {group.items.map(function (item) {
+                              {items.map(function (item, ri) {
                                 var value = activeEntry ? activeEntry[item.key] : null;
                                 return (
                                   <tr key={item.key}>
+                                    {numCols > 0 ? (function () {
+                                      var cells = [];
+                                      for (var ci = 0; ci < numCols; ci++) {
+                                        if (rowSpans[ri][ci] > 0) {
+                                          var span = rowSpans[ri][ci];
+                                          cells.push(
+                                            <td key={ci} className="deepdive-legend-seg" rowSpan={span > 1 ? span : undefined}>
+                                              {span > 1 ? (
+                                                <div className="deepdive-legend-seg-sticky">{colStripped[ci] ? colStripped[ci][ri] : item.segments[ci]}</div>
+                                              ) : (colStripped[ci] ? colStripped[ci][ri] : item.segments[ci])}
+                                            </td>
+                                          );
+                                        }
+                                      }
+                                      return cells;
+                                    })() : <td className="deepdive-legend-seg">-</td>}
                                     <td><span className="deepdive-legend-swatch" style={{ backgroundColor: item.color }}></span></td>
-                                    {item.segments.length > 0 ? item.segments.map(function (seg, si) {
-                                      return <td key={si} className="deepdive-legend-seg">{seg}</td>;
-                                    }) : <td className="deepdive-legend-seg">-</td>}
                                     <td className="deepdive-legend-val">{value != null ? formatValue(value) : '-'}</td>
                                   </tr>
                                 );
