@@ -69,6 +69,7 @@ export default function App() {
   const restoredState = useRef(null);
   const [restoredMetrics, setRestoredMetrics] = useState(null);
   const [deepDiveMetrics, setDeepDiveMetrics] = useState(new Set());  // Set of "source::type" strings
+  const [deepDiveIterations, setDeepDiveIterations] = useState(new Set());  // Set of iterationId strings (max 6)
   const [deepDiveConfigs, setDeepDiveConfigs] = useState([]);  // snapshot of supplemental metrics for deep dive
 
   // On mount, check for state in URL hash
@@ -211,15 +212,14 @@ export default function App() {
           <button
             className={view === 'deepdive' ? 'active' : ''}
             onClick={() => {
-              // Snapshot supplemental metric configs before CompareView unmounts
               if (compareRef.current) {
                 setDeepDiveConfigs(compareRef.current.getSupplementalMetrics() || []);
               }
               setView('deepdive');
             }}
-            disabled={selected.size === 0 || deepDiveMetrics.size === 0}
+            disabled={deepDiveIterations.size === 0 || deepDiveMetrics.size === 0}
           >
-            Deep Dive{deepDiveMetrics.size > 0 ? ' (' + deepDiveMetrics.size + ')' : ''}
+            Deep Dive{(deepDiveIterations.size > 0 || deepDiveMetrics.size > 0) ? ' (' + deepDiveIterations.size + 'i/' + deepDiveMetrics.size + 'm)' : ''}
           </button>
         </nav>
         </div>
@@ -255,11 +255,11 @@ export default function App() {
       )}
 
       {view === 'compare' && (
-        <CompareView ref={compareRef} selected={selected} groupByList={groupByList} setGroupByList={setGroupByList} hiddenFields={hiddenFields} setHiddenFields={setHiddenFields} restoredMetrics={restoredMetrics} deepDiveMetrics={deepDiveMetrics} setDeepDiveMetrics={setDeepDiveMetrics} />
+        <CompareView ref={compareRef} selected={selected} groupByList={groupByList} setGroupByList={setGroupByList} hiddenFields={hiddenFields} setHiddenFields={setHiddenFields} restoredMetrics={restoredMetrics} deepDiveMetrics={deepDiveMetrics} setDeepDiveMetrics={setDeepDiveMetrics} deepDiveIterations={deepDiveIterations} setDeepDiveIterations={setDeepDiveIterations} />
       )}
 
       {view === 'deepdive' && (
-        <DeepDiveView selected={selected} deepDiveMetrics={deepDiveMetrics} metricConfigs={deepDiveConfigs} />
+        <DeepDiveView selected={(() => { var m = new Map(); selected.forEach(function (it, id) { if (deepDiveIterations.has(id)) m.set(id, it); }); return m; })()} deepDiveMetrics={deepDiveMetrics} metricConfigs={deepDiveConfigs} hiddenFields={hiddenFields} />
       )}
 
       <DebugConsole />

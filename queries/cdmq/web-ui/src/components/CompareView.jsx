@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef, useImperativeHandle, forwardRef } from 'react';
+import { buildIterItems } from '../utils/iterLabel';
 import { ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip, ErrorBar, ResponsiveContainer, Legend, Cell, ReferenceLine, LabelList } from 'recharts';
 import * as api from '../api/cdm';
 import { timeWork } from '../debugLog';
@@ -10,6 +11,8 @@ const COLORS = [
 ];
 
 const SUPP_COLORS = ['#f97316', '#e879f9', '#14b8a6', '#ef4444', '#8b5cf6', '#06b6d4'];
+const ITER_THEME_BASES = ['#5b8def', '#ef5b5b', '#5bef8d', '#b85bef', '#5bcdef', '#efb85b'];
+const MAX_DEEP_DIVE_ITERS = 6;
 
 // Smart Y-axis tick formatter: adjusts decimal precision based on value magnitude
 function formatYTick(value) {
@@ -108,21 +111,21 @@ function computeCommonVarying(iters, hiddenSet) {
 
   // Benchmark
   if (benchmarks.size === 1) {
-    common.push({ key: 'benchmark', val: Array.from(benchmarks)[0] });
+    common.push({ key: 'benchmark', val: Array.from(benchmarks)[0], type: 'benchmark' });
   } else if (benchmarks.size > 1) {
     varyingKeys.add('benchmark');
   }
 
   Object.keys(paramValues).sort().forEach(function (arg) {
     if (paramValues[arg].size === 1) {
-      common.push({ key: arg, val: Array.from(paramValues[arg])[0] });
+      common.push({ key: arg, val: Array.from(paramValues[arg])[0], type: 'param' });
     } else {
       varyingKeys.add('param:' + arg);
     }
   });
   Object.keys(tagValues).sort().forEach(function (name) {
     if (tagValues[name].size === 1) {
-      common.push({ key: name, val: Array.from(tagValues[name])[0] });
+      common.push({ key: name, val: Array.from(tagValues[name])[0], type: 'tag' });
     } else {
       varyingKeys.add('tag:' + name);
     }
@@ -495,7 +498,7 @@ function buildDimOptions(iterations) {
   return opts;
 }
 
-const CompareView = forwardRef(function CompareView({ selected, groupByList, setGroupByList, hiddenFields, setHiddenFields, restoredMetrics, deepDiveMetrics, setDeepDiveMetrics }, ref) {
+const CompareView = forwardRef(function CompareView({ selected, groupByList, setGroupByList, hiddenFields, setHiddenFields, restoredMetrics, deepDiveMetrics, setDeepDiveMetrics, deepDiveIterations, setDeepDiveIterations }, ref) {
   var [metricValues, setMetricValues] = useState({});
   var [loading, setLoading] = useState(false);
   var [supplementalMetrics, setSupplementalMetrics] = useState([]); // [{ source, type, values: {iterId: {mean,...}} }]
@@ -1121,7 +1124,7 @@ const CompareView = forwardRef(function CompareView({ selected, groupByList, set
         }
       }
 
-      result.push({ metricName: metricName, data: chartData, commonItems: commonItems, groupInfo: groupInfo, varyingKeys: varyingKeys });
+      result.push({ metricName: metricName, data: chartData, commonItems: commonItems, groupInfo: groupInfo, varyingKeys: varyingKeys, sortedIterations: sorted });
     });
 
     return result;
@@ -1394,9 +1397,54 @@ const CompareView = forwardRef(function CompareView({ selected, groupByList, set
         return (
           <div key={ci} className="compare-chart-panel">
             <h3>{chart.metricName}</h3>
+            {/* Deep dive selected iterations — display only, selection happens on bar chart */}
+            {deepDiveIterations && ci === 0 && deepDiveIterations.size > 0 && (
+              <div className="compare-iter-selector">
+                <div className="compare-iter-selector-header">
+                  <span className="compare-iter-selector-label">Deep Dive Iterations ({deepDiveIterations.size}):</span>
+                  {deepDiveIterations.size >= MAX_DEEP_DIVE_ITERS && (
+                    <span className="compare-iter-limit-warning">Max {MAX_DEEP_DIVE_ITERS} reached</span>
+                  )}
+                </div>
+                <div className="compare-iter-cards">
+                  {Array.from(deepDiveIterations).map(function (itId, ii) {
+                    var it = iterations.find(function (iter) { return iter.iterationId === itId; });
+                    if (!it) return null;
+                    var themeColor = ITER_THEME_BASES[ii % ITER_THEME_BASES.length];
+                    var iterItems = buildIterItems(it, iterations, hiddenFields);
+                    return (
+                      <div key={itId} className="compare-iter-card compare-iter-card-selected"
+                        style={{ borderColor: themeColor, backgroundColor: themeColor + '20' }}>
+                        {iterItems.length > 0 ? iterItems.map(function (item, pi) {
+                          var label = item.type === 'benchmark' ? item.val : item.names.join(',') + '=' + item.val;
+                          return (
+                            <span key={pi} className={'compare-iter-card-param ' + (item.type === 'benchmark' ? 'benchmark-badge' : item.type === 'tag' ? 'tag' : 'param')}>
+                              {item.type === 'tag' && <span className="tag-key">{item.names.join(',')}</span>}
+                              {item.type === 'tag' ? '=' + item.val : label}
+                            </span>
+                          );
+                        }) : <span className="compare-iter-card-label">{it.iterationId.substring(0, 8)}</span>}
+                        <button className="compare-iter-card-remove" onClick={function () {
+                          setDeepDiveIterations(function (prev) { var next = new Set(prev); next.delete(itId); return next; });
+                        }}>&times;</button>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
             {chart.commonItems.length > 0 && (
               <div className="compare-subtitle">
-                {chart.commonItems.map(function (c) { return c.key + '=' + c.val; }).join(', ')}
+                <span className="compare-subtitle-label">Common:</span>
+                {chart.commonItems.map(function (c, ci) {
+                  return (
+                    <span key={ci} className={c.type === 'benchmark' ? 'benchmark-badge' : c.type === 'tag' ? 'tag' : 'param param-common'}>
+                      {c.type === 'tag' && <span className="tag-key">{c.key}</span>}
+                      {c.type === 'tag' ? '=' + c.val : c.type === 'benchmark' ? c.val : c.key + '=' + c.val}
+                    </span>
+                  );
+                })}
               </div>
             )}
 
@@ -1697,6 +1745,40 @@ const CompareView = forwardRef(function CompareView({ selected, groupByList, set
                   </div>
                 );
               });
+            })()}
+            {/* Deep dive iteration selection row — aligned with bars */}
+            {deepDiveIterations && (function () {
+              var nonGaps = chart.data.filter(function (d) { return !d.isGap; });
+              var atLimit = deepDiveIterations.size >= MAX_DEEP_DIVE_ITERS;
+              return (
+                <div className="compare-dd-select-row">
+                  <div className="compare-hier-label"></div>
+                  <div className="compare-dd-select-boxes">
+                    {chart.data.map(function (d, di) {
+                      if (d.isGap) return <div key={di} className="compare-dd-select-gap" style={{ flex: 1 }}></div>;
+                      var isSelected = deepDiveIterations.has(d.iterationId);
+                      var selArr = Array.from(deepDiveIterations);
+                      var themeIdx = isSelected ? selArr.indexOf(d.iterationId) : -1;
+                      var themeColor = themeIdx >= 0 ? ITER_THEME_BASES[themeIdx % ITER_THEME_BASES.length] : null;
+                      return (
+                        <div key={di} className={'compare-dd-select-box' + (isSelected ? ' compare-dd-selected' : '') + (!isSelected && atLimit ? ' compare-dd-disabled' : '')}
+                          style={isSelected ? { backgroundColor: themeColor, borderColor: themeColor } : undefined}
+                          onClick={function () {
+                            if (!isSelected && atLimit) return;
+                            setDeepDiveIterations(function (prev) {
+                              var next = new Set(prev);
+                              if (next.has(d.iterationId)) next.delete(d.iterationId); else next.add(d.iterationId);
+                              return next;
+                            });
+                          }}
+                          title={isSelected ? 'Remove from Deep Dive' : (atLimit ? 'Max ' + MAX_DEEP_DIVE_ITERS + ' reached' : 'Add to Deep Dive')}
+                        ></div>
+                      );
+                    })}
+                  </div>
+                  <div className="compare-dd-select-label">&larr; select up to 6 for deep dive</div>
+                </div>
+              );
             })()}
             <ResponsiveContainer width="100%" height={chartHeight}>
               <ComposedChart data={chart.data} margin={{ top: 20, right: 30, left: 60, bottom: 40 }} barCategoryGap="10%">

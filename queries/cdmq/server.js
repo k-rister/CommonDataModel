@@ -1561,7 +1561,7 @@ app.post('/api/v1/metric-data', async (req, res) => {
     var reqStart = Date.now();
     var breakoutStr = Array.isArray(breakout) ? breakout.join(',') : (breakout || 'none');
     serverLog('POST /api/v1/metric-data: ' + source + '::' + type + ' resolution=' + resolution + ' breakout=[' + breakoutStr + ']' + (filter ? ' filter=' + filter : '') + ' run=' + (run || 'none').toString().substring(0, 8) + '... period=' + (period || 'none').toString().substring(0, 8) + '...', req.reqId);
-    serverLog('  curl: curl -s -X POST http://localhost:3000/api/v1/metric-data -H "Content-Type: application/json" -d \'' + JSON.stringify({ run: run, period: period, begin: begin, end: end, source: source, type: type, resolution: resolution, breakout: breakout, filter: filter }) + '\'', req.reqId);
+    //serverLog('  curl: curl -s -X POST http://localhost:3000/api/v1/metric-data -H "Content-Type: application/json" -d \'' + JSON.stringify({ run: run, period: period, begin: begin, end: end, source: source, type: type, resolution: resolution, breakout: breakout, filter: filter }) + '\'', req.reqId);
 
     // Use instances from request if provided, otherwise use server's configured instances
     var instancesToUse = reqInstances && reqInstances.length > 0 ? reqInstances : instances;

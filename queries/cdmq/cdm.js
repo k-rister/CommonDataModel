@@ -677,7 +677,7 @@ async function fetchBatchedData(instance, reqs, batchSize = 16) {
       try {
         var osReqStart = Date.now();
         var bodyLen = req.body ? req.body.length : 0;
-        console.log('[' + new Date().toISOString() + '] [OS-REQ] POST ' + req.url + ' (' + bodyLen + ' bytes)');
+        //console.log POST ' + req.url + ' (' + bodyLen + ' bytes)');
         if (process.env.CDM_LOG_OS_CURL) {
           var curlBody = req.body.replace(/'/g, "'\\''");
           console.log('[' + new Date().toISOString() + '] [OS-CURL] curl -s -X POST "' + req.url + '" -H "Content-Type: application/json" -d $\'' + curlBody + '\'');
@@ -689,7 +689,7 @@ async function fetchBatchedData(instance, reqs, batchSize = 16) {
           headers: { 'Content-Type': 'application/json' },
         });
         var osElapsed = Date.now() - osReqStart;
-        console.log('[' + new Date().toISOString() + '] [OS-RESP] POST ' + req.url + ' status=' + response.status + ' in ' + osElapsed + 'ms');
+        //console.log POST ' + req.url + ' status=' + response.status + ' in ' + osElapsed + 'ms');
         if (response.ok) {
           try {
             return await response.json();
@@ -819,7 +819,7 @@ esJsonArrRequest = async function (instance, docType, action, jsonArr, yearDotMo
     } else {
       batchSize = 16;
     }
-    console.log('[' + new Date().toISOString() + '] [OS-BATCH] ' + reqs.length + ' _msearch request(s), ' + totalSubQueries + ' sub-queries, batchSize=' + batchSize);
+    //console.log ' + reqs.length + ' _msearch request(s), ' + totalSubQueries + ' sub-queries, batchSize=' + batchSize);
     var responses = await fetchBatchedData(instance, reqs, batchSize);
     reqs = [];
 
@@ -2921,7 +2921,7 @@ getMetricGroupsFromBreakouts = async function (instance, sets, yearDotMonth) {
     jsonArr.push(JSON.stringify(q));
     // Log the metric_desc query as curl for debugging
     var indexName = getIndexName('metric_desc', instance, yearDotMonth);
-    console.log('[' + new Date().toISOString() + '] [OS-METRIC-DESC] curl -s -X POST "http://' + instance['host'] + '/' + indexName + '/_search" -H "Content-Type: application/json" -d \'' + JSON.stringify(q) + '\'');
+    //console.log -s -X POST "http://' + instance['host'] + '/' + indexName + '/_search" -H "Content-Type: application/json" -d \'' + JSON.stringify(q) + '\'');
   });
   var mdStart = Date.now();
   var responses = await esJsonArrRequest(instance, 'metric_desc', '/_msearch', jsonArr, yearDotMonth);
@@ -3105,9 +3105,9 @@ sendMetricReq = async function (
       // Trim the pre-allocated array to actual size before sending
       var actualLen = jsonArr._writeIdx;
       var sendArr = jsonArr.slice(0, actualLen);
-      console.log('[' + new Date().toISOString() + '] [PERF] sendMetricReq: submitting ' + actualLen + ' jsonArr entries (' + (jsonArrEstimatedBytes/1024/1024).toFixed(1) + 'MB) to esJsonArrRequest');
+      //console.log: submitting ' + actualLen + ' jsonArr entries (' + (jsonArrEstimatedBytes/1024/1024).toFixed(1) + 'MB) to esJsonArrRequest');
       const theseResponses = await esJsonArrRequest(instance, 'metric_data', '/_msearch', sendArr, yearDotMonth);
-      console.log('[' + new Date().toISOString() + '] [PERF] sendMetricReq: esJsonArrRequest returned ' + theseResponses.length + ' responses in ' + (Date.now()-esStart) + 'ms');
+      //console.log: esJsonArrRequest returned ' + theseResponses.length + ' responses in ' + (Date.now()-esStart) + 'ms');
       responses.push(...theseResponses);
       jsonArr._writeIdx = 0;
       jsonArrTracker._writeIdx = 0;
@@ -3145,7 +3145,7 @@ sendMetricReq = async function (
           valueSets[setIdx][trackerLabel]
         );
       }
-      console.log('[' + new Date().toISOString() + '] [PERF] sendMetricReq: calcAvg processed responses in ' + (Date.now()-calcStart) + 'ms');
+      //console.log: calcAvg processed responses in ' + (Date.now()-calcStart) + 'ms');
     }
 
     if (thisBegin > thisEnd) {
@@ -3326,7 +3326,7 @@ getMetricDataFromIdsSets = async function (instance, sets, metricGroupIdsByLabel
       if (thisEnd > end) thisEnd = end;
       if (thisBegin > thisEnd) break;
     }
-    console.log('[' + new Date().toISOString() + '] [PERF] Built ' + timeRangeTemplates.length + ' time-range templates for set ' + idx);
+    //console.log templates for set ' + idx);
 
     const sortedKeys = Object.keys(metricGroupIdsByLabelSets[idx]).sort();
     var jsonArr = [];
@@ -3364,14 +3364,14 @@ getMetricDataFromIdsSets = async function (instance, sets, metricGroupIdsByLabel
 
       if (shouldFlush && jsonArr.length > 0) {
         var esStart = Date.now();
-        console.log('[' + new Date().toISOString() + '] [PERF] Flushing ' + jsonArr.length + ' entries (' + (k+1) + '/' + sortedKeys.length + ' labels) to OpenSearch');
+        //console.log ' + jsonArr.length + ' entries (' + (k+1) + '/' + sortedKeys.length + ' labels) to OpenSearch');
         var theseResponses = await esJsonArrRequest(instance, 'metric_data', '/_msearch', jsonArr, yearDotMonth);
-        console.log('[' + new Date().toISOString() + '] [PERF] OpenSearch returned ' + theseResponses.length + ' responses in ' + (Date.now()-esStart) + 'ms');
+        //console.log ' + theseResponses.length + ' responses in ' + (Date.now()-esStart) + 'ms');
         responses.push(...theseResponses);
 
         // Process responses
         var calcStart = Date.now();
-        console.log('[' + new Date().toISOString() + '] [DEBUG] Before calcAvg loop: jsonArrIdx=' + jsonArrIdx + ', responses.length=' + responses.length + ', jsonArrTracker.length=' + jsonArrTracker.length);
+        //console.log Before calcAvg loop: jsonArrIdx=' + jsonArrIdx + ', responses.length=' + responses.length + ', jsonArrTracker.length=' + jsonArrTracker.length);
         while (jsonArrIdx < responses.length * 2) {
           var trackerIdx = jsonArrIdx / 2;
           var tracker = jsonArrTracker[trackerIdx];
@@ -3384,7 +3384,7 @@ getMetricDataFromIdsSets = async function (instance, sets, metricGroupIdsByLabel
           jsonArrIdx = calcAvg(tracker.begin, tracker.end, responses, jsonArrIdx, jsonArrTracker, tracker.numMetricIds, valueSets[setIdx][trackerLabel]);
           console.log('[' + new Date().toISOString() + '] [DEBUG] calcAvg: label="' + trackerLabel + '", set=' + setIdx + ', jsonArrIdx ' + prevIdx + '->' + jsonArrIdx + ', values=' + valueSets[setIdx][trackerLabel].length);
         }
-        console.log('[' + new Date().toISOString() + '] [PERF] calcAvg in ' + (Date.now()-calcStart) + 'ms');
+        //console.log in ' + (Date.now()-calcStart) + 'ms');
 
         jsonArr = [];
         jsonArrTracker = [];
@@ -3392,12 +3392,12 @@ getMetricDataFromIdsSets = async function (instance, sets, metricGroupIdsByLabel
         jsonArrIdx = 0;
       }
 
-      if (k === 0 || lastPass || (Date.now() - labelStart > 500)) {
-        console.log('[' + new Date().toISOString() + '] [PERF] label ' + (k+1) + '/' + sortedKeys.length + ' "' + label + '" took ' + (Date.now() - labelStart) + 'ms');
-      }
+      //if (k === 0 || lastPass || (Date.now() - labelStart > 500)) {
+      //  console.log('[' + new Date().toISOString() + '] [PERF] label ' + (k+1) + '/' + sortedKeys.length + ' "' + label + '" took ' + (Date.now() - labelStart) + 'ms');
+      //}
     }
   }
-  console.log('[' + new Date().toISOString() + '] [PERF] getMetricDataFromIdsSets total: ' + (Date.now()-funcStart) + 'ms, valueSets.length=' + valueSets.length + ', keys=' + valueSets.map(function(vs, i) { return i + ':' + (vs ? Object.keys(vs).join(',') : 'null'); }).join(' | '));
+  console.log('[' + new Date().toISOString() + '] [PERF] getMetricDataFromIdsSets total: ' + (Date.now()-funcStart) + 'ms');
   return valueSets;
 };
 
