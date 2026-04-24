@@ -1437,7 +1437,7 @@ const CompareView = forwardRef(function CompareView({ selected, groupByList, set
                 <div className="compare-panel-metric">
                   <div className="compare-chart-with-labels">
                     <div className="compare-yaxis-label compare-yaxis-left" style={{ color: color }}>{sm.source}::{sm.type}</div>
-                    <div className="compare-chart-area" style={{ width: Math.max(600, nonGapData.length * 120 + 120) }}>
+                    <div className="compare-chart-area" style={{ width: Math.max(600, nonGapData.length * 120 + 120), flex: 'none' }}>
                   <ResponsiveContainer width="100%" height={180}>
                     <ComposedChart data={chart.data} margin={{ top: 10, right: 30, left: 60, bottom: 5 }} barCategoryGap="10%">
                       <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
@@ -1643,7 +1643,7 @@ const CompareView = forwardRef(function CompareView({ selected, groupByList, set
                 <div className="compare-panel-metric">
                   <div className="compare-chart-with-labels">
                     <div className="compare-yaxis-label compare-yaxis-left" style={{ color: color }}>{sm.source}::{sm.type}</div>
-                    <div className="compare-chart-area" style={{ width: Math.max(600, nonGapData.length * 120 + 120) }}>
+                    <div className="compare-chart-area" style={{ width: Math.max(600, nonGapData.length * 120 + 120), flex: 'none' }}>
                   <ResponsiveContainer width="100%" height={180}>
                     <ComposedChart data={chart.data} margin={{ top: 10, right: 30, left: 60, bottom: 5 }} barCategoryGap="10%">
 
@@ -1839,7 +1839,8 @@ const CompareView = forwardRef(function CompareView({ selected, groupByList, set
                 />
                 <YAxis
                   yAxisId="left"
-                  tick={{ fontSize: 12, fill: 'var(--text-secondary)' }}
+                  width={60}
+                  tick={{ fontSize: 11, fill: 'var(--text-secondary)' }}
                   tickFormatter={formatYTick}
                   stroke="var(--border)"
                 />
@@ -1971,13 +1972,9 @@ const CompareView = forwardRef(function CompareView({ selected, groupByList, set
               </ComposedChart>
             </ResponsiveContainer>
             {/* Chips grid below bars — one row per varying dimension */}
-            {(function () {
-              var rightOffset = hasOverlays ? 110 : 31;
-              var iterColWidth = Math.floor((Math.max(600, nonGapData.length * 120 + 120) - 120 - rightOffset) / nonGapData.length);
-              return (
             <div className="compare-chips-grid" style={{
-              gridTemplateColumns: '120px repeat(' + chart.data.length + ', ' + iterColWidth + 'px)',
-              marginRight: rightOffset + 'px'
+              gridTemplateColumns: '120px repeat(' + chart.data.length + ', minmax(0, 1fr))',
+              marginRight: (hasOverlays ? 110 : 31) + 'px'
             }}>
               {/* Row 1: deep-dive selection */}
               <div className="compare-chips-grid-label compare-dd-label" style={{ gridRow: 1, gridColumn: 1 }}>
@@ -2098,8 +2095,6 @@ const CompareView = forwardRef(function CompareView({ selected, groupByList, set
                 });
               })()}
             </div>
-              );
-            })()}
               </div>
               </div>
               {hasOverlays ? (
@@ -2225,7 +2220,7 @@ const CompareView = forwardRef(function CompareView({ selected, groupByList, set
                 <div className="compare-panel-metric">
                   <div className="compare-chart-with-labels">
                     <div className="compare-yaxis-label compare-yaxis-left" style={{ color: color }}>{sm.source}::{sm.type}</div>
-                    <div className="compare-chart-area" style={{ width: Math.max(600, nonGapData.length * 120 + 120) }}>
+                    <div className="compare-chart-area" style={{ width: Math.max(600, nonGapData.length * 120 + 120), flex: 'none' }}>
                   <ResponsiveContainer width="100%" height={180}>
                     <ComposedChart data={chart.data} margin={{ top: 10, right: 30, left: 60, bottom: 5 }} barCategoryGap="10%">
                       <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
