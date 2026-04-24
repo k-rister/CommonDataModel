@@ -1073,13 +1073,74 @@ a.run-id:hover {
 }
 
 /* CSS Grid for chips below bar chart */
-.compare-chips-grid-wrap {
-  overflow-x: hidden;
-}
-
 .compare-chips-grid {
   display: grid;
   gap: 2px;
+}
+
+.compare-chips-grid-label {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px 4px 2px 6px;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  background: var(--surface-alt);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  min-height: 20px;
+}
+
+.compare-dim-groupby {
+  background: rgba(91, 141, 239, 0.08);
+  border-color: rgba(91, 141, 239, 0.3);
+}
+
+.compare-dim-name {
+  flex: 1;
+  overflow-wrap: break-word;
+  word-break: break-word;
+  white-space: normal;
+  text-align: right;
+  font-family: 'SF Mono', ui-monospace, Consolas, monospace;
+}
+
+.compare-dim-btn {
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0;
+  font-size: 8px;
+  color: var(--text-muted);
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  border-radius: 2px;
+}
+
+.compare-dim-btn:hover {
+  color: var(--accent);
+  background: rgba(91, 141, 239, 0.1);
+}
+
+.compare-dim-btn:disabled {
+  opacity: 0.2;
+  cursor: default;
+}
+
+.compare-dim-btn:disabled:hover {
+  background: none;
+  color: var(--text-muted);
+}
+
+.compare-dim-btn-x:hover {
+  color: #ef4444;
+  background: rgba(239, 68, 68, 0.1);
 }
 
 /* Iteration chips below bar chart */
@@ -1177,6 +1238,20 @@ a.run-id:hover {
   white-space: normal;
   margin: 0 !important;
   display: flex;
+}
+
+.compare-span-chip-clickable {
+  cursor: pointer;
+  transition: border-color 0.15s, background-color 0.15s;
+}
+
+.compare-span-chip-clickable:hover {
+  border-color: var(--accent);
+}
+
+.compare-span-chip-dd {
+  border-width: 2px;
+  font-weight: 600;
 }
 
 .compare-subtitle {

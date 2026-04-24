@@ -88,11 +88,13 @@ function computeCommonVarying(iters, hiddenSet) {
   if (iters.length === 0) return { common: [], varyingKeys: new Set() };
   var hidden = hiddenSet || new Set();
 
+  var runIds = new Set();
   var benchmarks = new Set();
   var paramValues = {};
   var tagValues = {};
 
   iters.forEach(function (it) {
+    if (it.runId && !hidden.has('run')) runIds.add(it.runId);
     if (it.benchmark && !hidden.has('benchmark')) benchmarks.add(it.benchmark);
     (it.params || []).forEach(function (p) {
       if (hidden.has('param:' + p.arg)) return;
@@ -108,6 +110,11 @@ function computeCommonVarying(iters, hiddenSet) {
 
   var common = [];
   var varyingKeys = new Set();
+
+  // Run
+  if (runIds.size > 1) {
+    varyingKeys.add('run');
+  }
 
   // Benchmark
   if (benchmarks.size === 1) {
@@ -594,11 +601,9 @@ const CompareView = forwardRef(function CompareView({ selected, groupByList, set
     });
     // Sort by distinct count ascending (fewest values = best grouping level)
     dimCounts.sort(function (a, b) { return a.count - b.count; });
-    // Use all but the last one as group-by (last one stays as bar label)
-    if (dimCounts.length > 1) {
-      setGroupByList(dimCounts.slice(0, dimCounts.length - 1).map(function (d) { return d.value; }));
-    } else if (dimCounts.length === 1) {
-      setGroupByList([dimCounts[0].value]);
+    // All varying dimensions participate in group-by
+    if (dimCounts.length > 0) {
+      setGroupByList(dimCounts.map(function (d) { return d.value; }));
     }
   }, [iterations, dimOptions]);
 
@@ -1028,12 +1033,7 @@ const CompareView = forwardRef(function CompareView({ selected, groupByList, set
         var it = sorted[i];
         var gv = getCompoundGroupValue(it, groupByList);
 
-        // Insert gap between groups
-        if (hasGroupBy(groupByList) && gv !== prevGroup) {
-          if (prevGroup !== null) {
-            chartData.push({ name: '', value: null, isGap: true });
-          }
-        }
+        // No gap insertion — spanning chips show grouping visually
         prevGroup = gv;
 
         var mv = metricValues[it.iterationId];
@@ -1787,52 +1787,119 @@ const CompareView = forwardRef(function CompareView({ selected, groupByList, set
                 })}
               </ComposedChart>
             </ResponsiveContainer>
-            {/* Iteration chips below bars — uses same layout as hier-row */}
-            <div className="compare-hier-row">
-              <div className="compare-hier-label"></div>
-              <div className="compare-iter-chips-row">
-              {chart.data.map(function (d, di) {
-                if (d.isGap) return <div key={di} className="compare-iter-chip-gap"></div>;
-                var isPinned = resolvedPinnedEntry && resolvedPinnedEntry.entry && resolvedPinnedEntry.entry.iterationId === d.iterationId;
-                var ddSelected = deepDiveIterations && deepDiveIterations.has(d.iterationId);
-                var atLimit = deepDiveIterations && deepDiveIterations.size >= MAX_DEEP_DIVE_ITERS;
-                var themeIdx = ddSelected ? Array.from(deepDiveIterations).indexOf(d.iterationId) : -1;
-                var themeColor = themeIdx >= 0 ? ITER_THEME_BASES[themeIdx % ITER_THEME_BASES.length] : null;
-                // Build label from varying params not covered by group-by
-                var origIter = iterations.find(function (it) { return it.iterationId === d.iterationId; });
-                var iterItems = origIter ? buildIterItems(origIter, iterations, hiddenFields) : [];
-                // Exclude group-by dimensions from the chip label
-                var groupBySet = new Set(groupByList);
-                var filteredItems = iterItems.filter(function (item) {
-                  if (item.type === 'benchmark') return !groupBySet.has('benchmark');
-                  return !item.names.some(function (n) { return groupBySet.has((item.type === 'tag' ? 'tag:' : 'param:') + n); });
+            {/* Chips grid below bars — one row per varying dimension */}
+            <div className="compare-chips-grid" style={{
+              gridTemplateColumns: '120px repeat(' + chart.data.length + ', 1fr)',
+              marginRight: (hasOverlays ? 110 : 31) + 'px'
+            }}>
+              {(function () {
+                var orderedDims = [];
+                groupByList.forEach(function (dim) {
+                  if (chart.varyingKeys.has(dim)) orderedDims.push(dim);
                 });
-                return (
-                  <div key={di} className={'compare-iter-chip-col' + (ddSelected ? ' compare-iter-chip-dd-on' : '')}
-                    style={ddSelected ? { borderColor: themeColor, backgroundColor: themeColor + '15' } : undefined}
-                    onClick={function () {
-                      if (!ddSelected && atLimit) return;
-                      setDeepDiveIterations(function (prev) {
-                        var next = new Set(prev);
-                        if (next.has(d.iterationId)) next.delete(d.iterationId); else next.add(d.iterationId);
-                        return next;
-                      });
-                    }}
-                    title={ddSelected ? 'Remove from deep dive' : (atLimit && !ddSelected ? 'Max 6 reached' : 'Select for deep dive')}
-                  >
-                    {filteredItems.length > 0 ? filteredItems.map(function (item, pi) {
-                      var label = item.type === 'benchmark' ? item.val : item.names.join(',') + '=' + item.val;
-                      return (
-                        <span key={pi} className={'compare-iter-chip-param ' + (item.type === 'benchmark' ? 'benchmark-badge' : item.type === 'tag' ? 'tag' : 'param')}>
-                          {item.type === 'tag' && <span className="tag-key">{item.names.join(',')}</span>}
-                          {item.type === 'tag' ? '=' + item.val : label}
-                        </span>
-                      );
-                    }) : <span className="compare-iter-chip-id">{d.name || (d.iterationId || '').substring(0, 8)}</span>}
-                  </div>
-                );
-              })}
-              </div>
+                chart.varyingKeys.forEach(function (dim) {
+                  if (orderedDims.indexOf(dim) < 0) orderedDims.push(dim);
+                });
+
+                return orderedDims.map(function (dim, dimIdx) {
+                  var row = dimIdx + 1;
+                  var groupByIdx = groupByList.indexOf(dim);
+                  var isGroupBy = groupByIdx >= 0;
+                  var runs = [];
+                  for (var di = 0; di < chart.data.length; di++) {
+                    var d = chart.data[di];
+                    if (d.isGap) continue;
+                    var origIter = iterations.find(function (it) { return it.iterationId === d.iterationId; });
+                    var val = origIter ? getDimValue(origIter, dim) : '';
+                    if (runs.length === 0 || val !== runs[runs.length - 1].val) {
+                      runs.push({ val: val, firstDi: di, lastDi: di, iterIds: [d.iterationId] });
+                    } else {
+                      runs[runs.length - 1].lastDi = di;
+                      runs[runs.length - 1].iterIds.push(d.iterationId);
+                    }
+                  }
+                  return (
+                    <React.Fragment key={'dim-' + dimIdx}>
+                      <div className={'compare-chips-grid-label' + (isGroupBy ? ' compare-dim-groupby' : '')} style={{ gridRow: row, gridColumn: 1 }}>
+                        <span className="compare-dim-name">{formatDimLabel(dim)}</span>
+                        {dimIdx > 0 && (
+                          <button className="compare-dim-btn" onClick={function () {
+                            var prevDim = orderedDims[dimIdx - 1];
+                            setGroupByList(function (prev) {
+                              var next = prev.slice();
+                              var myIdx = next.indexOf(dim);
+                              var pIdx = next.indexOf(prevDim);
+                              if (myIdx < 0) { next.push(dim); }
+                              if (pIdx < 0) { next.push(prevDim); }
+                              myIdx = next.indexOf(dim);
+                              pIdx = next.indexOf(prevDim);
+                              next[myIdx] = prevDim;
+                              next[pIdx] = dim;
+                              return next;
+                            });
+                          }} title="Move up">{'▲'}</button>
+                        )}
+                        {dimIdx < orderedDims.length - 1 && (
+                          <button className="compare-dim-btn" onClick={function () {
+                            var nextDim = orderedDims[dimIdx + 1];
+                            setGroupByList(function (prev) {
+                              var next = prev.slice();
+                              var myIdx = next.indexOf(dim);
+                              var nIdx = next.indexOf(nextDim);
+                              if (myIdx < 0) { next.push(dim); }
+                              if (nIdx < 0) { next.push(nextDim); }
+                              myIdx = next.indexOf(dim);
+                              nIdx = next.indexOf(nextDim);
+                              next[myIdx] = nextDim;
+                              next[nIdx] = dim;
+                              return next;
+                            });
+                          }} title="Move down">{'▼'}</button>
+                        )}
+                        <button className="compare-dim-btn compare-dim-btn-x" onClick={function () {
+                          setHiddenFields(function (prev) { return prev.concat([dim]); });
+                          setGroupByList(function (prev) { return prev.filter(function (d) { return d !== dim; }); });
+                        }} title="Hide dimension">{'×'}</button>
+                      </div>
+                      {runs.map(function (run, ri) {
+                        var colStart = run.firstDi + 2;
+                        var span = run.lastDi - run.firstDi + 1;
+                        var formatted = formatDimValue(dim, run.val);
+                        var isPerIter = run.iterIds.length === 1;
+                        var iterId = isPerIter ? run.iterIds[0] : null;
+                        var ddSelected = isPerIter && deepDiveIterations && deepDiveIterations.has(iterId);
+                        var atLimit = deepDiveIterations && deepDiveIterations.size >= MAX_DEEP_DIVE_ITERS;
+                        var themeIdx = ddSelected ? Array.from(deepDiveIterations).indexOf(iterId) : -1;
+                        var themeColor = themeIdx >= 0 ? ITER_THEME_BASES[themeIdx % ITER_THEME_BASES.length] : null;
+
+                        var chipStyle = { gridRow: row, gridColumn: colStart + ' / span ' + span };
+                        if (ddSelected && themeColor) {
+                          chipStyle.borderColor = themeColor;
+                          chipStyle.backgroundColor = themeColor + '15';
+                        }
+
+                        return (
+                          <div key={'span-' + ri}
+                            className={'compare-span-chip ' + (dim === 'benchmark' ? 'benchmark-badge' : dim.startsWith('tag:') ? 'tag' : 'param') + (ddSelected ? ' compare-span-chip-dd' : '') + (isPerIter ? ' compare-span-chip-clickable' : '')}
+                            style={chipStyle}
+                            onClick={isPerIter ? function () {
+                              if (!ddSelected && atLimit) return;
+                              setDeepDiveIterations(function (prev) {
+                                var next = new Set(prev);
+                                if (next.has(iterId)) next.delete(iterId); else next.add(iterId);
+                                return next;
+                              });
+                            } : undefined}
+                            title={isPerIter ? (ddSelected ? 'Remove from deep dive' : (atLimit ? 'Max 6 reached' : 'Select for deep dive')) : formatted}
+                          >
+                            {formatted}
+                          </div>
+                        );
+                      })}
+                    </React.Fragment>
+                  );
+                });
+              })()}
             </div>
               </div>
               </div>
