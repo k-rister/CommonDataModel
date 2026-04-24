@@ -60,7 +60,6 @@ body {
 }
 
 .app {
-  max-width: 1400px;
   margin: 0 auto;
   padding: 16px 24px 120px;
 }
@@ -1240,18 +1239,44 @@ a.run-id:hover {
   display: flex;
 }
 
-.compare-span-chip-clickable {
+/* Deep-dive selection row */
+.compare-dd-label {
+  border-color: transparent;
+  background: transparent;
+}
+
+.compare-dd-cell {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 2px dashed var(--border);
+  border-radius: var(--radius-sm);
   cursor: pointer;
-  transition: border-color 0.15s, background-color 0.15s;
+  min-height: 22px;
+  font-size: 13px;
+  font-weight: 700;
+  font-family: 'SF Mono', ui-monospace, Consolas, monospace;
+  color: rgba(255, 255, 255, 0.9);
+  transition: background-color 0.15s, border-color 0.15s;
 }
 
-.compare-span-chip-clickable:hover {
+.compare-dd-cell:hover {
   border-color: var(--accent);
+  border-style: solid;
 }
 
-.compare-span-chip-dd {
-  border-width: 2px;
-  font-weight: 600;
+.compare-dd-selected {
+  border-style: solid;
+}
+
+.compare-dd-disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+
+.compare-dd-disabled:hover {
+  border-color: var(--border);
+  border-style: dashed;
 }
 
 .compare-subtitle {
@@ -1978,6 +2003,43 @@ a.run-id:hover {
   gap: 4px;
   overflow-y: auto;
   align-self: flex-start;
+}
+
+.compare-sidebar-hidden {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 4px;
+}
+
+.compare-sidebar-hidden-label {
+  font-size: 9px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.compare-sidebar-hidden-chip {
+  display: inline-block;
+  padding: 2px 6px;
+  font-size: 10px;
+  font-family: 'SF Mono', ui-monospace, Consolas, monospace;
+  background: var(--surface);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s;
+}
+
+.compare-sidebar-hidden-chip:hover {
+  border-color: var(--accent);
+  color: var(--text);
+  border-style: solid;
 }
 
 .compare-sidebar-empty {
