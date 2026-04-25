@@ -88,11 +88,13 @@ function computeCommonVarying(iters, hiddenSet) {
   if (iters.length === 0) return { common: [], varyingKeys: new Set() };
   var hidden = hiddenSet || new Set();
 
+  var runIds = new Set();
   var benchmarks = new Set();
   var paramValues = {};
   var tagValues = {};
 
   iters.forEach(function (it) {
+    if (it.runId && !hidden.has('run')) runIds.add(it.runId);
     if (it.benchmark && !hidden.has('benchmark')) benchmarks.add(it.benchmark);
     (it.params || []).forEach(function (p) {
       if (hidden.has('param:' + p.arg)) return;
@@ -108,6 +110,11 @@ function computeCommonVarying(iters, hiddenSet) {
 
   var common = [];
   var varyingKeys = new Set();
+
+  // Run
+  if (runIds.size > 1) {
+    varyingKeys.add('run');
+  }
 
   // Benchmark
   if (benchmarks.size === 1) {
@@ -594,11 +601,9 @@ const CompareView = forwardRef(function CompareView({ selected, groupByList, set
     });
     // Sort by distinct count ascending (fewest values = best grouping level)
     dimCounts.sort(function (a, b) { return a.count - b.count; });
-    // Use all but the last one as group-by (last one stays as bar label)
-    if (dimCounts.length > 1) {
-      setGroupByList(dimCounts.slice(0, dimCounts.length - 1).map(function (d) { return d.value; }));
-    } else if (dimCounts.length === 1) {
-      setGroupByList([dimCounts[0].value]);
+    // All varying dimensions participate in group-by
+    if (dimCounts.length > 0) {
+      setGroupByList(dimCounts.map(function (d) { return d.value; }));
     }
   }, [iterations, dimOptions]);
 
@@ -1028,12 +1033,7 @@ const CompareView = forwardRef(function CompareView({ selected, groupByList, set
         var it = sorted[i];
         var gv = getCompoundGroupValue(it, groupByList);
 
-        // Insert gap between groups
-        if (hasGroupBy(groupByList) && gv !== prevGroup) {
-          if (prevGroup !== null) {
-            chartData.push({ name: '', value: null, isGap: true });
-          }
-        }
+        // No gap insertion — spanning chips show grouping visually
         prevGroup = gv;
 
         var mv = metricValues[it.iterationId];
@@ -1397,42 +1397,6 @@ const CompareView = forwardRef(function CompareView({ selected, groupByList, set
         return (
           <div key={ci} className="compare-chart-panel">
             <h3>{chart.metricName}</h3>
-            {/* Deep dive selected iterations — display only, selection happens on bar chart */}
-            {deepDiveIterations && ci === 0 && deepDiveIterations.size > 0 && (
-              <div className="compare-iter-selector">
-                <div className="compare-iter-selector-header">
-                  <span className="compare-iter-selector-label">Deep Dive Iterations ({deepDiveIterations.size}):</span>
-                  {deepDiveIterations.size >= MAX_DEEP_DIVE_ITERS && (
-                    <span className="compare-iter-limit-warning">Max {MAX_DEEP_DIVE_ITERS} reached</span>
-                  )}
-                </div>
-                <div className="compare-iter-cards">
-                  {Array.from(deepDiveIterations).map(function (itId, ii) {
-                    var it = iterations.find(function (iter) { return iter.iterationId === itId; });
-                    if (!it) return null;
-                    var themeColor = ITER_THEME_BASES[ii % ITER_THEME_BASES.length];
-                    var iterItems = buildIterItems(it, iterations, hiddenFields);
-                    return (
-                      <div key={itId} className="compare-iter-card compare-iter-card-selected"
-                        style={{ borderColor: themeColor, backgroundColor: themeColor + '20' }}>
-                        {iterItems.length > 0 ? iterItems.map(function (item, pi) {
-                          var label = item.type === 'benchmark' ? item.val : item.names.join(',') + '=' + item.val;
-                          return (
-                            <span key={pi} className={'compare-iter-card-param ' + (item.type === 'benchmark' ? 'benchmark-badge' : item.type === 'tag' ? 'tag' : 'param')}>
-                              {item.type === 'tag' && <span className="tag-key">{item.names.join(',')}</span>}
-                              {item.type === 'tag' ? '=' + item.val : label}
-                            </span>
-                          );
-                        }) : <span className="compare-iter-card-label">{it.iterationId.substring(0, 8)}</span>}
-                        <button className="compare-iter-card-remove" onClick={function () {
-                          setDeepDiveIterations(function (prev) { var next = new Set(prev); next.delete(itId); return next; });
-                        }}>&times;</button>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
 
             {chart.commonItems.length > 0 && (
               <div className="compare-subtitle">
@@ -1448,6 +1412,213 @@ const CompareView = forwardRef(function CompareView({ selected, groupByList, set
               </div>
             )}
 
+
+            {/* Panel-mode supplemental metrics: rendered above the primary chart */}
+            {supplementalMetrics.map(function (sm, si) {
+              if (sm.display !== 'panel') return null;
+              var color = SUPP_COLORS[si % SUPP_COLORS.length];
+              var dataKey = 'supp_' + si;
+              var vals = [];
+              chart.data.forEach(function (d) {
+                if (d.isGap) return;
+                if (d[dataKey] != null) vals.push(d[dataKey]);
+                Object.keys(d).forEach(function (k) {
+                  if (k.startsWith(dataKey + '_') && !k.endsWith('_stddevPct') && !k.endsWith('_error') && !k.endsWith('_samples') && d[k] != null) {
+                    vals.push(d[k]);
+                  }
+                });
+              });
+              var min = vals.length > 0 ? Math.min.apply(null, vals) : 0;
+              var max = vals.length > 0 ? Math.max.apply(null, vals) : 1;
+              var pad = (max - min) * 0.1 || 0.1;
+              return (
+                <React.Fragment key={'panel-top-' + si}>
+                {renderMetricControls(sm, si)}
+                <div className="compare-panel-metric">
+                  <div className="compare-chart-with-labels">
+                    <div className="compare-yaxis-label compare-yaxis-left" style={{ color: color }}>{sm.source}::{sm.type}</div>
+                    <div className="compare-chart-area" style={{ width: Math.max(600, nonGapData.length * 120 + 120), flex: 'none' }}>
+                  <ResponsiveContainer width="100%" height={180}>
+                    <ComposedChart data={chart.data} margin={{ top: 10, right: 30, left: 60, bottom: 5 }} barCategoryGap="10%">
+                      <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
+                      <XAxis dataKey="name" hide={true} />
+                      <YAxis
+                        yAxisId="left"
+                        domain={[Math.max(0, min - pad), max + pad]}
+                        tick={{ fontSize: 11, fill: 'var(--text-secondary)' }}
+                        tickFormatter={formatYTick}
+                        stroke="var(--border)"
+                      />
+                      <Tooltip
+                        content={function (props) {
+                          if (!props.active || !props.payload || props.payload.length === 0) return null;
+                          var entry = props.payload[0].payload;
+                          if (!entry || entry.isGap) return null;
+                          return (
+                            <div className="compare-tooltip-mini">
+                              {entry.name}
+                            </div>
+                          );
+                        }}
+                      />
+                      {hasOverlays ? (
+                        <YAxis yAxisId="right" orientation="right" width={80} tick={false} axisLine={false} />
+                      ) : (
+                        <YAxis yAxisId="right" orientation="right" width={1} tick={false} axisLine={false} />
+                      )}
+                      {pinnedEntry && pinnedEntry.entry && pinnedEntry.entry.name && (
+                        <ReferenceLine x={pinnedEntry.entry.name} yAxisId="left" stroke="#ff6b6b" strokeDasharray="6 4" strokeWidth={2} />
+                      )}
+                      {(function () {
+                        if (sm.breakouts.length > 0) {
+                          var labelSet = new Set();
+                          chart.data.forEach(function (d) {
+                            if (d.isGap) return;
+                            Object.keys(d).forEach(function (k) {
+                              var prefix = dataKey + '_';
+                              if (k.startsWith(prefix) && !k.endsWith('_stddevPct') && !k.endsWith('_error') && !k.endsWith('_samples')) {
+                                labelSet.add(k);
+                              }
+                            });
+                          });
+                          var labels = Array.from(labelSet).sort(naturalCompare);
+                          var ct = sm.chartType || 'bar';
+                          if (labels.length > 0) {
+                            return labels.map(function (lk, li) {
+                              var labelName = lk.substring((dataKey + '_').length);
+                              var itemColor = SUPP_COLORS[(si + li) % SUPP_COLORS.length];
+                              if (ct === 'line') {
+                                return (
+                                  <Line key={lk} dataKey={lk} yAxisId="left" type="monotone"
+                                    stroke={itemColor} strokeWidth={2}
+                                    dot={{ r: 4, fill: itemColor }}
+                                    connectNulls={false} name={labelName} />
+                                );
+                              }
+                              return (
+                                <Bar key={lk} dataKey={lk} yAxisId="left"
+                                  radius={ct === 'stacked' ? [0, 0, 0, 0] : [3, 3, 0, 0]}
+                                  stackId={ct === 'stacked' ? 'stack' : undefined}
+                                  name={labelName} style={{ cursor: 'pointer' }}
+                                  onClick={function (data) {
+                                    if (data && !data.isGap) {
+                                      setPinnedEntry(function (prev) {
+                                        if (prev && prev.entry && prev.entry.iterationId === data.iterationId) return null;
+                                        return { entry: data, metricName: chart.metricName };
+                                      });
+                                    }
+                                  }}>
+                                  <LabelList dataKey={lk} content={function (props) {
+                                    if (ct === 'stacked') {
+                                      var val3 = props.value;
+                                      var w3 = props.width;
+                                      var h3 = props.height;
+                                      if (val3 == null || w3 == null || h3 == null) return null;
+                                      var text3 = formatBarLabel(val3);
+                                      if (text3.length * 8 > w3 - 4 || Math.abs(h3) < 14) return null;
+                                      return (
+                                        <text x={props.x + w3 / 2} y={props.y + h3 / 2} textAnchor="middle" dominantBaseline="middle"
+                                          fontSize={12} fontWeight={700} fontFamily="ui-monospace, Consolas, monospace"
+                                          fill="rgba(255,255,255,0.9)">{text3}</text>
+                                      );
+                                    }
+                                    var val2 = props.value;
+                                    var w2 = props.width;
+                                    var h2 = props.height;
+                                    if (val2 == null || w2 == null || h2 == null) return null;
+                                    var text2 = formatBarLabel(val2);
+                                    if (text2.length * 8 > w2 - 4 || h2 < 16) return null;
+                                    return (
+                                      <text x={props.x + w2 / 2} y={props.y + h2 / 2} textAnchor="middle" dominantBaseline="middle"
+                                        fontSize={12} fontWeight={700} fontFamily="ui-monospace, Consolas, monospace"
+                                        fill="rgba(255,255,255,0.9)">{text2}</text>
+                                    );
+                                  }} />
+                                  {chart.data.map(function (entry, idx) {
+                                    var isPinnedBk = pinnedEntry && pinnedEntry.entry && pinnedEntry.entry.iterationId === entry.iterationId;
+                                    var bkOpacity = pinnedEntry ? (isPinnedBk ? 0.9 : 0.2) : 0.7;
+                                    return <Cell key={idx} fill={entry.isGap ? 'transparent' : itemColor} fillOpacity={bkOpacity} />;
+                                  })}
+                                </Bar>
+                              );
+                            });
+                          }
+                        }
+                        return (
+                          <Bar dataKey={dataKey} yAxisId="left" radius={[3, 3, 0, 0]} style={{ cursor: 'pointer' }}
+                            onClick={function (data) {
+                              if (data && !data.isGap) {
+                                setPinnedEntry(function (prev) {
+                                  if (prev && prev.entry && prev.entry.iterationId === data.iterationId) return null;
+                                  return { entry: data, metricName: chart.metricName };
+                                });
+                              }
+                            }}
+                          >
+                            <ErrorBar dataKey={dataKey + '_error'} width={4} strokeWidth={2} stroke="var(--text-secondary)" />
+                            <LabelList dataKey={dataKey} content={function (props) {
+                              var val4 = props.value;
+                              var w4 = props.width;
+                              var h4 = props.height;
+                              if (val4 == null || w4 == null || h4 == null) return null;
+                              var text4 = formatBarLabel(val4);
+                              if (text4.length * 8 > w4 - 4 || h4 < 16) return null;
+                              return (
+                                <text x={props.x + w4 / 2} y={props.y + h4 / 2} textAnchor="middle" dominantBaseline="middle"
+                                  fontSize={12} fontWeight={700} fontFamily="ui-monospace, Consolas, monospace"
+                                  fill="rgba(255,255,255,0.9)">{text4}</text>
+                              );
+                            }} />
+                            {chart.data.map(function (entry, idx) {
+                              var isPinnedCell = pinnedEntry && pinnedEntry.entry && pinnedEntry.entry.iterationId === entry.iterationId;
+                              var cellOpacity = pinnedEntry ? (isPinnedCell ? 0.9 : 0.2) : 0.7;
+                              return <Cell key={idx} fill={entry.isGap ? 'transparent' : color} fillOpacity={cellOpacity} />;
+                            })}
+                          </Bar>
+                        );
+                      })()}
+                    </ComposedChart>
+                  </ResponsiveContainer>
+                    </div>
+                    {supplementalMetrics.length > 0 && <div className="compare-yaxis-label compare-yaxis-right">&nbsp;</div>}
+                    <div className="compare-sidebar" style={{ maxHeight: 180 }}>
+                    {resolvedPinnedEntry && resolvedPinnedEntry.entry && !resolvedPinnedEntry.entry.isGap ? (function () {
+                      var e = resolvedPinnedEntry.entry;
+                      if (sm.breakouts.length > 0) {
+                        var prefix = dataKey + '_';
+                        var flatItems = [];
+                        Object.keys(e).filter(function (k) {
+                          return k.startsWith(prefix) && !k.endsWith('_stddevPct') && !k.endsWith('_error') && !k.endsWith('_samples');
+                        }).sort(naturalCompare).forEach(function (k, ki) {
+                          var labelName = k.substring(prefix.length);
+                          flatItems.push({ label: labelName, value: e[k] != null ? formatValue(e[k]) : '-', color: SUPP_COLORS[(si + ki) % SUPP_COLORS.length] });
+                        });
+                        var groupItems = flatItems.map(function (item) {
+                          return { segments: parseBreakoutSegments(item.label), value: item.value, color: item.color };
+                        });
+                        return renderGroupedBreakouts(groupItems, 0, sm.breakouts);
+                      } else {
+                        var v = e[dataKey];
+                        return (
+                          <div className="compare-sidebar-item" style={{ color: color }}>
+                            <div className="compare-sidebar-label">{sm.source}::{sm.type}</div>
+                            <div className="compare-sidebar-value">{v != null ? formatValue(v) : '-'}</div>
+                          </div>
+                        );
+                      }
+                    })() : <div className="compare-sidebar-empty">Click a bar</div>}
+                    </div>
+                  </div>
+                </div>
+              </React.Fragment>
+              );
+            })}
+
+            {/* Overlay-mode metric controls */}
+            {supplementalMetrics.map(function (sm, si) {
+              if (sm.display === 'panel') return null;
+              return renderMetricControls(sm, si);
+            })}
 
             {false && supplementalMetrics.map(function (sm, si) {
               if (sm.display !== 'panel') return null;
@@ -1472,7 +1643,7 @@ const CompareView = forwardRef(function CompareView({ selected, groupByList, set
                 <div className="compare-panel-metric">
                   <div className="compare-chart-with-labels">
                     <div className="compare-yaxis-label compare-yaxis-left" style={{ color: color }}>{sm.source}::{sm.type}</div>
-                    <div className="compare-chart-area">
+                    <div className="compare-chart-area" style={{ width: Math.max(600, nonGapData.length * 120 + 120), flex: 'none' }}>
                   <ResponsiveContainer width="100%" height={180}>
                     <ComposedChart data={chart.data} margin={{ top: 10, right: 30, left: 60, bottom: 5 }} barCategoryGap="10%">
 
@@ -1653,148 +1824,23 @@ const CompareView = forwardRef(function CompareView({ selected, groupByList, set
 
             <div className="compare-chart-with-labels">
               <div className="compare-yaxis-label compare-yaxis-left">{chart.metricName}</div>
-              <div className="compare-chart-area">
+              <div className="compare-chart-scroll">
+              <div className="compare-chart-area" style={{ width: Math.max(600, nonGapData.length * 120 + 120) }}>
             {/* Toolbar: hidden dims, add, auto, clear — above headers */}
             <div className="compare-hier-toolbar">
-              {hiddenFields.map(function (dim) {
-                var opt = allDimOptions.find(function (o) { return o.value === dim; });
-                return (
-                  <span key={dim} className="compare-hier-hidden-chip" onClick={function () {
-                    setHiddenFields(hiddenFields.filter(function (d) { return d !== dim; }));
-                    if (!groupByList.includes(dim)) setGroupByList(groupByList.concat([dim]));
-                  }} title="Click to restore">{opt ? opt.label : dim}</span>
-                );
-              })}
-              {dimOptions.filter(function (o) { return o.value !== 'none' && !groupByList.includes(o.value) && !hiddenFields.includes(o.value); }).length > 0 && (
-                <select className="compare-hier-add-select" value="" onChange={function (e) {
-                  if (e.target.value && !groupByList.includes(e.target.value)) {
-                    setGroupByList(groupByList.concat([e.target.value]));
-                  }
-                }}>
-                  <option value="">+ Add</option>
-                  {dimOptions.filter(function (o) { return o.value !== 'none' && !groupByList.includes(o.value) && !hiddenFields.includes(o.value); }).map(function (o) {
-                    return <option key={o.value} value={o.value}>{o.label}</option>;
-                  })}
-                </select>
-              )}
               <button className="btn btn-sm btn-secondary" onClick={handleAutoGroup} style={{ fontSize: 10, padding: '2px 6px' }}>Auto</button>
-              {groupByList.length > 0 && (
-                <button className="btn btn-sm btn-secondary" onClick={function () { setGroupByList([]); }} style={{ fontSize: 10, padding: '2px 6px' }}>Clear</button>
-              )}
             </div>
-            {/* Hierarchical group-by headers with inline controls */}
-            {hasGroupBy(groupByList) && (function () {
-              var nonGaps = chart.data.filter(function (d) { return !d.isGap; });
-              var iterMap = {};
-              iterations.forEach(function (it) { iterMap[it.iterationId] = it; });
-              var levels = [];
-              groupByList.forEach(function (dim, dimIdx) {
-                var spans = [];
-                var currentVal = null;
-                var currentCount = 0;
-                nonGaps.forEach(function (d) {
-                  var origIter = iterMap[d.iterationId];
-                  var val = origIter ? getDimValue(origIter, dim) : '';
-                  if (val !== currentVal) {
-                    if (currentVal !== null) spans.push({ value: formatDimValue(dim, currentVal), count: currentCount });
-                    currentVal = val;
-                    currentCount = 0;
-                  }
-                  currentCount++;
-                });
-                if (currentVal !== null) spans.push({ value: formatDimValue(dim, currentVal), count: currentCount });
-                // Skip dimensions with only one span (single value across all iterations)
-                if (spans.length <= 1) return;
-                levels.push({ label: formatDimLabel(dim), dim: dim, dimIdx: dimIdx, spans: spans });
-              });
-              return levels.map(function (level, li) {
-                return (
-                  <div key={li} className="compare-hier-row">
-                    <div className="compare-hier-label">{level.label}</div>
-                    <div className="compare-hier-spans">
-                      {level.spans.map(function (span, si2) {
-                        return (
-                          <div key={si2} className="compare-hier-span" style={{ flex: span.count }}>
-                            {span.value}
-                          </div>
-                        );
-                      })}
-                    </div>
-                    <div className="compare-hier-controls">
-                      {level.dimIdx > 0 && (
-                        <button className="compare-hier-btn" onClick={function () {
-                          var next = groupByList.slice();
-                          next[level.dimIdx] = next[level.dimIdx - 1];
-                          next[level.dimIdx - 1] = level.dim;
-                          setGroupByList(next);
-                        }} title="Move up">&#x25B2;</button>
-                      )}
-                      {level.dimIdx < groupByList.length - 1 && (
-                        <button className="compare-hier-btn" onClick={function () {
-                          var next = groupByList.slice();
-                          next[level.dimIdx] = next[level.dimIdx + 1];
-                          next[level.dimIdx + 1] = level.dim;
-                          setGroupByList(next);
-                        }} title="Move down">&#x25BC;</button>
-                      )}
-                      <button className="compare-hier-btn compare-hier-hide" onClick={function () {
-                        setGroupByList(groupByList.filter(function (d) { return d !== level.dim; }));
-                        setHiddenFields(hiddenFields.concat([level.dim]));
-                      }} title="Hide this dimension">&times;</button>
-                    </div>
-                  </div>
-                );
-              });
-            })()}
-            {/* Deep dive iteration selection row — aligned with bars */}
-            {deepDiveIterations && (function () {
-              var nonGaps = chart.data.filter(function (d) { return !d.isGap; });
-              var atLimit = deepDiveIterations.size >= MAX_DEEP_DIVE_ITERS;
-              return (
-                <div className="compare-dd-select-row">
-                  <div className="compare-hier-label"></div>
-                  <div className="compare-dd-select-boxes">
-                    {chart.data.map(function (d, di) {
-                      if (d.isGap) return <div key={di} className="compare-dd-select-gap" style={{ flex: 1 }}></div>;
-                      var isSelected = deepDiveIterations.has(d.iterationId);
-                      var selArr = Array.from(deepDiveIterations);
-                      var themeIdx = isSelected ? selArr.indexOf(d.iterationId) : -1;
-                      var themeColor = themeIdx >= 0 ? ITER_THEME_BASES[themeIdx % ITER_THEME_BASES.length] : null;
-                      return (
-                        <div key={di} className={'compare-dd-select-box' + (isSelected ? ' compare-dd-selected' : '') + (!isSelected && atLimit ? ' compare-dd-disabled' : '')}
-                          style={isSelected ? { backgroundColor: themeColor, borderColor: themeColor } : undefined}
-                          onClick={function () {
-                            if (!isSelected && atLimit) return;
-                            setDeepDiveIterations(function (prev) {
-                              var next = new Set(prev);
-                              if (next.has(d.iterationId)) next.delete(d.iterationId); else next.add(d.iterationId);
-                              return next;
-                            });
-                          }}
-                          title={isSelected ? 'Remove from Deep Dive' : (atLimit ? 'Max ' + MAX_DEEP_DIVE_ITERS + ' reached' : 'Add to Deep Dive')}
-                        ></div>
-                      );
-                    })}
-                  </div>
-                  <div className="compare-dd-select-label">&larr; select up to 6 for deep dive</div>
-                </div>
-              );
-            })()}
             <ResponsiveContainer width="100%" height={chartHeight}>
-              <ComposedChart data={chart.data} margin={{ top: 20, right: 30, left: 60, bottom: 40 }} barCategoryGap="10%">
+              <ComposedChart data={chart.data} margin={{ top: 20, right: 30, left: 60, bottom: 5 }} barCategoryGap="10%">
                 <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
                 <XAxis
                   dataKey="name"
-                  height={40}
-                  tick={{ fontSize: 10, fill: 'var(--text-muted)' }}
-                  angle={-45}
-                  textAnchor="end"
-                  stroke="var(--border)"
-                  interval={0}
+                  hide={true}
                 />
                 <YAxis
                   yAxisId="left"
-                  tick={{ fontSize: 12, fill: 'var(--text-secondary)' }}
+                  width={60}
+                  tick={{ fontSize: 11, fill: 'var(--text-secondary)' }}
                   tickFormatter={formatYTick}
                   stroke="var(--border)"
                 />
@@ -1925,6 +1971,131 @@ const CompareView = forwardRef(function CompareView({ selected, groupByList, set
                 })}
               </ComposedChart>
             </ResponsiveContainer>
+            {/* Chips grid below bars — one row per varying dimension */}
+            <div className="compare-chips-grid" style={{
+              gridTemplateColumns: '120px repeat(' + chart.data.length + ', minmax(0, 1fr))',
+              marginRight: (hasOverlays ? 110 : 31) + 'px'
+            }}>
+              {/* Row 1: deep-dive selection */}
+              <div className="compare-chips-grid-label compare-dd-label" style={{ gridRow: 1, gridColumn: 1 }}>
+                <span className="compare-dim-name">{'Deep Dive →'}</span>
+              </div>
+              {chart.data.map(function (d, di) {
+                if (d.isGap) return null;
+                var col = di + 2;
+                var ddSelected = deepDiveIterations && deepDiveIterations.has(d.iterationId);
+                var atLimit = deepDiveIterations && deepDiveIterations.size >= MAX_DEEP_DIVE_ITERS;
+                var ddArr = deepDiveIterations ? Array.from(deepDiveIterations) : [];
+                var themeIdx = ddSelected ? ddArr.indexOf(d.iterationId) : -1;
+                var themeColor = themeIdx >= 0 ? ITER_THEME_BASES[themeIdx % ITER_THEME_BASES.length] : null;
+                var letter = themeIdx >= 0 ? String.fromCharCode(65 + themeIdx) : '';
+                return (
+                  <div key={'dd-' + di}
+                    className={'compare-dd-cell' + (ddSelected ? ' compare-dd-selected' : '') + (!ddSelected && atLimit ? ' compare-dd-disabled' : '')}
+                    style={ddSelected && themeColor ? { gridRow: 1, gridColumn: col, backgroundColor: themeColor, borderColor: themeColor } : { gridRow: 1, gridColumn: col }}
+                    onClick={function () {
+                      if (!ddSelected && atLimit) return;
+                      setDeepDiveIterations(function (prev) {
+                        var next = new Set(prev);
+                        if (next.has(d.iterationId)) next.delete(d.iterationId); else next.add(d.iterationId);
+                        return next;
+                      });
+                    }}
+                    title={ddSelected ? 'Remove from deep dive (' + letter + ')' : (atLimit ? 'Max ' + MAX_DEEP_DIVE_ITERS + ' reached' : 'Select for deep dive')}
+                  >
+                    {letter}
+                  </div>
+                );
+              })}
+              {(function () {
+                var orderedDims = [];
+                groupByList.forEach(function (dim) {
+                  if (chart.varyingKeys.has(dim)) orderedDims.push(dim);
+                });
+                chart.varyingKeys.forEach(function (dim) {
+                  if (orderedDims.indexOf(dim) < 0) orderedDims.push(dim);
+                });
+
+                return orderedDims.map(function (dim, dimIdx) {
+                  var row = dimIdx + 2;
+                  var groupByIdx = groupByList.indexOf(dim);
+                  var isGroupBy = groupByIdx >= 0;
+                  var runs = [];
+                  for (var di = 0; di < chart.data.length; di++) {
+                    var d = chart.data[di];
+                    if (d.isGap) continue;
+                    var origIter = iterations.find(function (it) { return it.iterationId === d.iterationId; });
+                    var val = origIter ? getDimValue(origIter, dim) : '';
+                    if (runs.length === 0 || val !== runs[runs.length - 1].val) {
+                      runs.push({ val: val, firstDi: di, lastDi: di, iterIds: [d.iterationId] });
+                    } else {
+                      runs[runs.length - 1].lastDi = di;
+                      runs[runs.length - 1].iterIds.push(d.iterationId);
+                    }
+                  }
+                  return (
+                    <React.Fragment key={'dim-' + dimIdx}>
+                      <div className={'compare-chips-grid-label' + (isGroupBy ? ' compare-dim-groupby' : '')} style={{ gridRow: row, gridColumn: 1 }}>
+                        <span className="compare-dim-name">{formatDimLabel(dim)}</span>
+                        {dimIdx > 0 && (
+                          <button className="compare-dim-btn" onClick={function () {
+                            var prevDim = orderedDims[dimIdx - 1];
+                            setGroupByList(function (prev) {
+                              var next = prev.slice();
+                              var myIdx = next.indexOf(dim);
+                              var pIdx = next.indexOf(prevDim);
+                              if (myIdx < 0) { next.push(dim); }
+                              if (pIdx < 0) { next.push(prevDim); }
+                              myIdx = next.indexOf(dim);
+                              pIdx = next.indexOf(prevDim);
+                              next[myIdx] = prevDim;
+                              next[pIdx] = dim;
+                              return next;
+                            });
+                          }} title="Move up">{'▲'}</button>
+                        )}
+                        {dimIdx < orderedDims.length - 1 && (
+                          <button className="compare-dim-btn" onClick={function () {
+                            var nextDim = orderedDims[dimIdx + 1];
+                            setGroupByList(function (prev) {
+                              var next = prev.slice();
+                              var myIdx = next.indexOf(dim);
+                              var nIdx = next.indexOf(nextDim);
+                              if (myIdx < 0) { next.push(dim); }
+                              if (nIdx < 0) { next.push(nextDim); }
+                              myIdx = next.indexOf(dim);
+                              nIdx = next.indexOf(nextDim);
+                              next[myIdx] = nextDim;
+                              next[nIdx] = dim;
+                              return next;
+                            });
+                          }} title="Move down">{'▼'}</button>
+                        )}
+                        <button className="compare-dim-btn compare-dim-btn-x" onClick={function () {
+                          setHiddenFields(function (prev) { return prev.concat([dim]); });
+                          setGroupByList(function (prev) { return prev.filter(function (d) { return d !== dim; }); });
+                        }} title="Hide dimension">{'×'}</button>
+                      </div>
+                      {runs.map(function (run, ri) {
+                        var colStart = run.firstDi + 2;
+                        var span = run.lastDi - run.firstDi + 1;
+                        var formatted = formatDimValue(dim, run.val);
+                        return (
+                          <div key={'span-' + ri}
+                            className={'compare-span-chip ' + (dim === 'benchmark' ? 'benchmark-badge' : dim.startsWith('tag:') ? 'tag' : 'param')}
+                            style={{ gridRow: row, gridColumn: colStart + ' / span ' + span }}
+                            title={formatted}
+                          >
+                            {formatted}
+                          </div>
+                        );
+                      })}
+                    </React.Fragment>
+                  );
+                });
+              })()}
+            </div>
+              </div>
               </div>
               {hasOverlays ? (
                 <div className="compare-yaxis-label compare-yaxis-right">
@@ -1934,6 +2105,20 @@ const CompareView = forwardRef(function CompareView({ selected, groupByList, set
                 <div className="compare-yaxis-label compare-yaxis-right">&nbsp;</div>
               ) : null}
               <div className="compare-sidebar" style={{ maxHeight: chartHeight }}>
+                {hiddenFields.length > 0 && (
+                  <div className="compare-sidebar-hidden">
+                    <div className="compare-sidebar-hidden-label">Hidden</div>
+                    {hiddenFields.map(function (dim) {
+                      var opt = allDimOptions.find(function (o) { return o.value === dim; });
+                      return (
+                        <span key={dim} className="compare-sidebar-hidden-chip" onClick={function () {
+                          setHiddenFields(hiddenFields.filter(function (d) { return d !== dim; }));
+                          if (!groupByList.includes(dim)) setGroupByList(groupByList.concat([dim]));
+                        }} title="Click to restore">{opt ? opt.label : formatDimLabel(dim)}</span>
+                      );
+                    })}
+                  </div>
+                )}
                 {resolvedPinnedEntry && resolvedPinnedEntry.entry && !resolvedPinnedEntry.entry.isGap && resolvedPinnedEntry.entry.value != null ? (function () {
                   var e = resolvedPinnedEntry.entry;
                   var items = [];
@@ -2012,8 +2197,8 @@ const CompareView = forwardRef(function CompareView({ selected, groupByList, set
               );
             })()}
 
-            {/* Panel-mode supplemental metrics: rendered below the primary chart */}
-            {supplementalMetrics.map(function (sm, si) {
+            {/* Old panel-mode metrics removed — now rendered above the primary chart */}
+            {false && supplementalMetrics.map(function (sm, si) {
               if (sm.display !== 'panel') return null;
               var color = SUPP_COLORS[si % SUPP_COLORS.length];
               var dataKey = 'supp_' + si;
@@ -2035,7 +2220,7 @@ const CompareView = forwardRef(function CompareView({ selected, groupByList, set
                 <div className="compare-panel-metric">
                   <div className="compare-chart-with-labels">
                     <div className="compare-yaxis-label compare-yaxis-left" style={{ color: color }}>{sm.source}::{sm.type}</div>
-                    <div className="compare-chart-area">
+                    <div className="compare-chart-area" style={{ width: Math.max(600, nonGapData.length * 120 + 120), flex: 'none' }}>
                   <ResponsiveContainer width="100%" height={180}>
                     <ComposedChart data={chart.data} margin={{ top: 10, right: 30, left: 60, bottom: 5 }} barCategoryGap="10%">
                       <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
@@ -2213,12 +2398,6 @@ const CompareView = forwardRef(function CompareView({ selected, groupByList, set
                 {renderMetricControls(sm, si)}
               </React.Fragment>
               );
-            })}
-
-            {/* Overlay-mode metric controls: rendered below the primary chart */}
-            {supplementalMetrics.map(function (sm, si) {
-              if (sm.display === 'panel') return null;
-              return renderMetricControls(sm, si);
             })}
 
           </div>
