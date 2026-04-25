@@ -589,21 +589,23 @@ export default function IterationTable({ iterations, selected, onToggleSelect, o
       {(commonList.length > 0 || hiddenDims.length > 0) && (
         <div className="results-common">
           {commonList.length > 0 && (
-            <>
-              <span className="results-common-label">Common:</span>
-              {commonList.map(function (p, i) {
-                return (
-                  <span key={i} className={p.type === 'benchmark' ? 'benchmark-badge' : p.type === 'tag' ? 'tag' : 'param param-common'}>
-                    {p.type === 'tag' && <span className="tag-key">{p.key}</span>}
-                    {p.type === 'tag' ? '=' + p.val : p.type === 'benchmark' ? p.val : p.key + '=' + p.val}
-                  </span>
-                );
-              })}
-            </>
+            <details className="results-common-details" open>
+              <summary className="results-common-summary">Common ({commonList.length})</summary>
+              <div className="results-common-chips">
+                {commonList.map(function (p, i) {
+                  return (
+                    <span key={i} className={p.type === 'benchmark' ? 'benchmark-badge' : p.type === 'tag' ? 'tag' : 'param param-common'}>
+                      {p.type === 'tag' && <span className="tag-key">{p.key}</span>}
+                      {p.type === 'tag' ? '=' + p.val : p.type === 'benchmark' ? p.val : p.key + '=' + p.val}
+                    </span>
+                  );
+                })}
+              </div>
+            </details>
           )}
           {hiddenDims.length > 0 && (
-            <>
-              <span className="results-common-label" style={commonList.length > 0 ? { marginLeft: 16 } : undefined}>Hidden:</span>
+            <div className="results-common-hidden">
+              <span className="results-common-label">Hidden:</span>
               {hiddenDims.map(function (dim) {
                 return (
                   <span key={dim} className={dimChipClass(dim) + ' hidden-dim-chip'} onClick={function () { unhideGroupDim(dim); }} title="Click to restore">
@@ -611,7 +613,7 @@ export default function IterationTable({ iterations, selected, onToggleSelect, o
                   </span>
                 );
               })}
-            </>
+            </div>
           )}
         </div>
       )}

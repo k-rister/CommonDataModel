@@ -702,7 +702,88 @@ Primary metric values are NOT loaded with iteration details (would add ~7 second
 
 ### Start-Server Restart Loop
 
-`start-server.sh` runs server.js in a `while true` loop. Killing the Node process (`pkill -f 'node ./server.js'`) triggers an automatic restart with updated code after a 1-second delay. This avoids the need to stop/restart the container during development.
+`start-server.sh` runs server.js in a `while true` loop with `npm ci` and web UI build gated by stamp files (only re-run when `package-lock.json` changes). Killing the Node process (`pkill -f 'node ./server.js'`) triggers an automatic restart. Full restart via `sudo crucible stop opensearch && sudo crucible start opensearch`.
+
+### Metric Query Performance (20x improvement)
+
+The `getMetricDataFromIdsSets` function was rewritten to address a 100-second bottleneck when querying 130+ breakout labels at resolution=100:
+
+1. **Time-range templates**: The 4 queries per time window (weighted avg, total weight, 2 boundary doc fetches) share identical structure except timestamps. Templates are built once per set with `__IDS__` placeholder, then reused per label via `String.replace()`.
+
+2. **Periodic flushing**: Instead of accumulating all queries (104K+ array entries) before sending to OpenSearch, flush every 10 labels. Keeps array sizes small and lets OpenSearch process while building the next batch.
+
+3. **Native fetch**: Replaced `then-request` (which spawns child processes via `sync-rpc`) with Node.js native `fetch` for all async OpenSearch HTTP requests.
+
+4. **Debug function short-circuit**: `numMBytes()` and `memUsage()` now return immediately when `debugOut == 0`, avoiding `JSON.stringify` on large arrays.
+
+5. **Two-pass filter**: When `filter` is set with `resolution > 1`, first queries at resolution=1 to determine surviving labels, then re-queries at the requested resolution with only those labels' UUIDs.
+
+---
+
+## Deep Dive Workflow
+
+### Overview
+
+The Deep Dive view provides time-series line charts for selected metrics at high resolution (default 100 data points), with multiple iterations overlaid.
+
+### Entry Flow
+
+1. In Compare view, check "Dive" on metric panels to select metrics for deep dive
+2. "Deep Dive (N)" button becomes enabled in the nav bar
+3. Clicking it snapshots the supplemental metric configs (breakouts, filters) and switches view
+4. DeepDiveView fetches period info, then metric data sequentially per metric
+
+### Data Alignment
+
+CDM metric data is continuous — each sample covers a `[begin, end]` range in epoch-ms with no gaps. All series at the same resolution have exactly N samples. The chart uses **sample index** as the X coordinate (not raw elapsed midpoints) to ensure all series from different iterations align perfectly on the same grid. The X-axis displays elapsed time based on the longest period's duration.
+
+### Chart Modes
+
+Each metric chart has independent controls:
+- **Combined**: All iterations overlaid on one chart (300px)
+- **Split**: One chart per iteration stacked vertically (200px each), with consistent Y-axis scale across iterations
+- **Lines / Stacked**: In split mode, toggle between individual lines and stacked area charts (useful for CPU utilization breakdown)
+
+### Zoom
+
+- **Click + drag** on any chart to select a time range (blue highlight)
+- All charts re-query with the zoomed time range at the same resolution (more detail)
+- Zoom is composable — zoom again within a zoomed view
+- "Reset Zoom" button shows current zoom percentage
+- Zoom is percentage-based: each iteration's begin/end adjusted proportionally
+
+### Series Legend
+
+Below each chart, a unified legend table shows all breakout labels once (not duplicated per iteration):
+
+- **Segment columns**: Breakout dimension values with rowSpan grouping and sticky text for tall cells
+- **Per-iteration columns**: Color swatch + value pair for each iteration, with iteration chip header matching the context bar style
+- **Live tracking**: Values update as pointer moves across any chart, synchronized across all charts via shared elapsed time
+- **Click-to-pin**: Click locks all charts; click again to resume live tracking
+- **Common prefix/suffix stripping**: Hostnames like `f35-h17-000-r640.rdu2.scalelab.redhat.com` shown as `f35-h17-000-r640`
+- **Empty series**: No color swatch shown when an iteration lacks data for a label
+
+### Per-Iteration Color Themes
+
+Each iteration gets a color family (blues, reds, greens, purples, teals, ambers). Within each family, shade varies per breakout label. This makes it easy to identify which iteration a line belongs to.
+
+### Context Bar
+
+Above the charts, a context section shows:
+- **Common**: Params/tags/benchmark shared across all iterations (chip-styled, respects hidden fields)
+- **Chip legend**: bench/tag/param color reference
+- **Iterations**: Labeled chips with iteration-specific varying params, colored with the iteration's theme
+
+### Server Endpoints
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| POST | `/api/v1/iterations/period-info` | Period IDs and time ranges per iteration |
+| POST | `/api/v1/metric-data` | Time-series metric values with resolution and breakouts |
+
+### Progressive Loading
+
+Metrics are fetched sequentially (one metric at a time). Within each metric, iterations run concurrently. Charts render progressively as data arrives.
 
 ---
 
@@ -710,13 +791,15 @@ Primary metric values are NOT loaded with iteration details (would add ~7 second
 
 ### Current Limitations
 
-- **Phase 3 (Deep Dive):** Time-series line charts are not yet implemented
 - **Large result sets:** Searching across many months with hundreds of runs can be slow due to sequential OpenSearch queries
 - **Bundle size:** Recharts adds ~400KB to the bundle. Code splitting could help.
 - **Breakout label parsing:** CDM may omit breakout dimensions with single values from labels, making label-to-dimension mapping imperfect. The sidebar uses segment-based grouping to work around this.
+- **Deep dive color differentiation:** With many breakout labels, shades within an iteration's color theme can be hard to distinguish
 
 ### Planned Features
 
-- **Deep Dive view:** Time-series line charts with zoom/pan and interactive breakout exploration
+- **Deep dive series filtering:** Click-to-hide individual series or groups in the legend
+- **Deep dive breakout controls:** Add/remove breakouts directly in deep dive view
+- **"Other" aggregate series:** For filtered-out labels, show a single aggregated line
 - **Save/load workflows:** Server-side or localStorage persistence of named workflows
 - **Drag-to-reorder:** Group-by chips currently use arrow buttons; drag-and-drop would be more intuitive

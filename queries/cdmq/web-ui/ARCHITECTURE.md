@@ -1,8 +1,8 @@
 # Crucible Web UI — Architecture & Design
 
-> **Note:** This document covers the initial Phase 1 architecture. For comprehensive
-> documentation covering all phases (search, compare, supplemental metrics, breakouts,
-> URL sharing, etc.), see **[DESIGN.md](DESIGN.md)**.
+> **Note:** This document covers the initial architecture overview. For comprehensive
+> documentation covering all phases (search, compare, deep dive, supplemental metrics,
+> breakouts, URL sharing, performance optimizations, etc.), see **[DESIGN.md](DESIGN.md)**.
 
 ## Overview
 
@@ -51,6 +51,7 @@ queries/cdmq/
 │   │       ├── IterationTable.jsx  # Results table with sorting/filtering
 │   │       ├── SelectionBar.jsx    # Persistent selection display
 │   │       ├── CompareView.jsx     # Bar charts with grouping, metrics, breakouts
+│   │       ├── DeepDiveView.jsx   # Time-series line charts with zoom and legends
 │   │       ├── AutocompleteInput.jsx # Reusable dropdown (single/multi-select)
 │   │       └── DebugConsole.jsx    # Timing/debug console panel
 │   └── dist/               # Build output (served by Express in production)
@@ -347,12 +348,9 @@ See sections above and [DESIGN.md](DESIGN.md) for full details.
 ### Phase 2: Compare — Implemented
 Bar chart comparison with hierarchical group-by headers, supplemental metrics (overlay + panel modes), breakouts with filter/sample selection, click-to-pin with reference lines, URL state sharing. See [DESIGN.md](DESIGN.md) for full details.
 
-### Phase 3: Deep Dive (Time-Series Line Charts) — Planned
+### Phase 3: Deep Dive (Time-Series Line Charts) — Implemented
 
-Interactive time-series exploration:
-- Line charts with zoom/pan
-- Breakout exploration
-- Iteration overlay with relative time alignment
+Time-series line charts with per-iteration color themes, combined/split/stacked modes, brush-to-zoom with re-query, unified series legend with rowSpan grouping, live value tracking across all charts, and two-pass filter support. See [DESIGN.md](DESIGN.md) for full details.
 
 ## Design Decisions & Rationale
 
