@@ -2652,47 +2652,91 @@ getMetricGroupTermsFromAgg = function (agg, terms) {
 exports.getMetricGroupTermsFromAgg = getMetricGroupTermsFromAgg;
 
 // --------------------------------------------------------------------------------------------------------------
+// Parse a breakout entry from either structured object or legacy string format.
+// Returns { name, values (array|null), regex (string|null), aggregate (bool) }
+function parseBreakoutEntry(entry) {
+  if (typeof entry === 'object' && entry !== null && entry.name) {
+    return {
+      name: entry.name,
+      values: entry.values || null,
+      regex: entry.regex || null,
+      aggregate: !!entry.aggregate
+    };
+  }
+  var parsed = { name: String(entry), values: null, regex: null, aggregate: false };
+  var eqMatch = /^([^=]+)=(.+)$/.exec(entry);
+  if (eqMatch) {
+    parsed.name = eqMatch[1];
+    var val = eqMatch[2];
+    var regexMatch = /^([rR])(.)(.+)\2$/.exec(val);
+    if (regexMatch) {
+      parsed.regex = regexMatch[3];
+      parsed.aggregate = regexMatch[1] === 'R';
+    } else {
+      parsed.values = val.split('+');
+    }
+  }
+  return parsed;
+}
+exports.parseBreakoutEntry = parseBreakoutEntry;
+
+function buildAggregateLabel(bp, maxLen) {
+  maxLen = maxLen || 30;
+  if (bp.values && bp.values.length > 0) {
+    var vals = bp.values.slice().sort(function (a, b) {
+      var na = Number(a), nb = Number(b);
+      if (!isNaN(na) && !isNaN(nb)) return na - nb;
+      return a < b ? -1 : a > b ? 1 : 0;
+    });
+    var allNumeric = vals.every(function (v) { return !isNaN(Number(v)); });
+    if (allNumeric) {
+      var nums = vals.map(Number);
+      var ranges = [];
+      var start = nums[0], end = nums[0];
+      for (var i = 1; i < nums.length; i++) {
+        if (nums[i] === end + 1) {
+          end = nums[i];
+        } else {
+          ranges.push(start === end ? String(start) : start + '-' + end);
+          start = end = nums[i];
+        }
+      }
+      ranges.push(start === end ? String(start) : start + '-' + end);
+      var rangeStr = ranges.join(',');
+      if (rangeStr.length <= maxLen) return rangeStr;
+    }
+    var joined = vals.join(',');
+    if (joined.length <= maxLen) return joined;
+  }
+  if (bp.regex) {
+    if (bp.regex.length <= maxLen) return '/' + bp.regex + '/';
+  }
+  var count = bp.values ? bp.values.length : '?';
+  return count + ' values';
+}
+
+// --------------------------------------------------------------------------------------------------------------
 getBreakoutAggregation = function (source, type, breakout) {
   var agg_str = '{';
   agg_str += '"metric_desc.source": { "terms": { "field": "metric_desc.source"}';
   agg_str += ',"aggs": { "metric_desc.type": { "terms": { "field": "metric_desc.type"}';
-  // More nested aggregations are added, one per field found in the broeakout
+  // More nested aggregations are added, one per field found in the breakout
   var field_count = 0;
-  var regExp = /([^\=]+)\=([^\=]+)/;
-  //var matches = regExp.exec("");
 
   if (Array.isArray(breakout)) {
-    breakout.forEach((field) => {
-      //if (/([^\=]+)\=([^\=]+)/.exec(field)) {
-      var matches = regExp.exec(field);
-      var shouldAggregate = true; // default: include in aggregation
+    breakout.forEach((entry) => {
+      var bp = parseBreakoutEntry(entry);
 
-      if (matches) {
-        //field = $1;
-        var fieldName = matches[1];
-        var value = matches[2];
-
-        // Check if this is an aggregated regex pattern (R/pattern/)
-        // If uppercase R, we should NOT add this field to the aggregation
-        // (all matches will be combined into a single metric)
-        if (/^R./.test(value)) {
-          shouldAggregate = false;
-        }
-
-        field = fieldName;
-      }
-
-      // Only add to aggregation if shouldAggregate is true
-      if (shouldAggregate) {
+      if (!bp.aggregate) {
         agg_str +=
           ',"aggs": { "metric_desc.names.' +
-          field +
+          bp.name +
           '": { "terms": ' +
           '{ "show_term_doc_count_error": true, "size": ' +
           bigQuerySize +
           ',' +
           '"field": "metric_desc.names.' +
-          field +
+          bp.name +
           '" }';
         field_count++;
       }
@@ -2871,48 +2915,22 @@ getMetricGroupsFromBreakouts = async function (instance, sets, yearDotMonth) {
     if (set.run != null) {
       q.query.bool.filter.push(JSON.parse('{"term": {"run.run-uuid": "' + set.run + '"}}'));
     }
-    // If the breakout contains a match requirement (something like "host=myhost"), then we must add a term filter for it.
-    // Multiple values can be specified with commas: "host=a,b,c" which will match any of those values.
-    // Regex patterns can be specified with r/pattern/ (separate metrics) or R/pattern/ (aggregated metric).
-    var regExp = /([^\=]+)\=([^\=]+)/;
-    set.breakout.forEach((field) => {
-      var matches = regExp.exec(field);
-      if (matches) {
-        field = matches[1];
-        value = matches[2];
-
-        // Check if it's a regex pattern: r/pattern/ or R/pattern/
-        // Group 1: r or R (lowercase = separate metrics, uppercase = aggregated)
-        // Group 2: delimiter character (usually /, but can be any char)
-        // Group 3: the actual regex pattern
-        // \2: backreference to ensure matching closing delimiter
-        var regexMatch = /^([rR])(.)(.+)\2$/.exec(value);
-
-        if (regexMatch) {
-          // It's a regex pattern
-          var isAggregated = regexMatch[1] === 'R';
-          var delimiter = regexMatch[2];
-          var pattern = regexMatch[3];
-
-          // Add regexp filter to OpenSearch query
-          // Both r/pattern/ and R/pattern/ use the same filter,
-          // the difference is in the aggregation (handled in getBreakoutAggregation)
+    // Add filters for breakout entries that specify values or regex patterns
+    set.breakout.forEach((entry) => {
+      var bp = parseBreakoutEntry(entry);
+      if (bp.regex) {
+        q.query.bool.filter.push(
+          JSON.parse('{"regexp": {"metric_desc.names.' + bp.name + '": ' + JSON.stringify(bp.regex) + '}}')
+        );
+      } else if (bp.values) {
+        if (bp.values.length > 1) {
           q.query.bool.filter.push(
-            JSON.parse('{"regexp": {"metric_desc.names.' + field + '": ' + JSON.stringify(pattern) + '}}')
+            JSON.parse('{"terms": {"metric_desc.names.' + bp.name + '": ' + JSON.stringify(bp.values) + '}}')
           );
         } else {
-          // Not a regex pattern, handle as literal value(s)
-          // Multiple values are separated by '+': field=value1+value2
-          var values = value.split('+');
-          if (values.length > 1) {
-            // Multiple values: use "terms" query (note the plural)
-            q.query.bool.filter.push(
-              JSON.parse('{"terms": {"metric_desc.names.' + field + '": ' + JSON.stringify(values) + '}}')
-            );
-          } else {
-            // Single value: use "term" query (singular)
-            q.query.bool.filter.push(JSON.parse('{"term": {"metric_desc.names.' + field + '": "' + value + '"}}'));
-          }
+          q.query.bool.filter.push(
+            JSON.parse('{"term": {"metric_desc.names.' + bp.name + '": "' + bp.values[0] + '"}}')
+          );
         }
       }
     });
@@ -2938,26 +2956,34 @@ getMetricGroupsFromBreakouts = async function (instance, sets, yearDotMonth) {
     // Derive the label from each group and organize into a dict, key = label, value = the filter terms
     var metricGroupTermsByLabel = getMetricGroupTermsByLabel(metricGroupTerms);
 
-    // Extract regexp filters that were excluded from aggregation (R/pattern/)
-    // These need to be preserved when querying for metric IDs
+    // For aggregated breakouts, insert a synthetic label segment at the correct position
     var regexpFilters = [];
-    var regExp = /([^\=]+)\=([^\=]+)/;
-    sets[idx].breakout.forEach((field) => {
-      var matches = regExp.exec(field);
-      if (matches) {
-        var fieldName = matches[1];
-        var value = matches[2];
-        var regexMatch = /^([rR])(.)(.+)\2$/.exec(value);
-        if (regexMatch) {
-          var isAggregated = regexMatch[1] === 'R';
-          var pattern = regexMatch[3];
-          if (isAggregated) {
-            // This field was excluded from aggregation, need to preserve the regexp filter
-            regexpFilters.push({ field: fieldName, pattern: pattern });
-          }
-        }
+    var aggregatedPositions = [];
+    sets[idx].breakout.forEach((entry, bpIdx) => {
+      var bp = parseBreakoutEntry(entry);
+      if (!bp.aggregate) return;
+      if (bp.regex) {
+        regexpFilters.push({ field: bp.name, pattern: bp.regex });
       }
+      aggregatedPositions.push({ position: bpIdx, segment: '<' + buildAggregateLabel(bp) + '>' });
     });
+    if (aggregatedPositions.length > 0) {
+      var oldLabels = Object.keys(metricGroupTermsByLabel);
+      if (oldLabels.length === 0) {
+        var synLabel = aggregatedPositions.map(function (ap) { return ap.segment; }).join('-');
+        metricGroupTermsByLabel[synLabel] = '';
+      } else {
+        var updated = {};
+        oldLabels.forEach(function (oldLabel) {
+          var segments = oldLabel.match(/<[^>]*>/g) || [];
+          aggregatedPositions.forEach(function (ap) {
+            segments.splice(ap.position, 0, ap.segment);
+          });
+          updated[segments.join('-')] = metricGroupTermsByLabel[oldLabel];
+        });
+        metricGroupTermsByLabel = updated;
+      }
+    }
 
     var thisLabelSet = {
       run: sets[idx].run,
@@ -3519,14 +3545,7 @@ getMetricDataSets = async function (instance, sets, yearDotMonth) {
   for (var i = 0; i < sets.length; i++) {
     if (sets[i].breakout != 'undefined') {
       for (var j = 0; j < sets[i].breakout.length; j++) {
-        var breakout = sets[i].breakout[j];
-        // The breakout requested might have a match included, for example, csid=1.  We only
-        // want the string before the '='
-        var regExp = /([^\=]+)\=([^\=]+)/;
-        var matches = regExp.exec(breakout);
-        if (matches) {
-          breakout = matches[1];
-        }
+        var breakout = parseBreakoutEntry(sets[i].breakout[j]).name;
         if (!setBreakouts[i].includes(breakout)) {
           retMsg +=
             'ERROR: the breakout [' +
@@ -3561,18 +3580,14 @@ getMetricDataSets = async function (instance, sets, yearDotMonth) {
   // Check if any regex filters resulted in zero matches
   for (var idx = 0; idx < metricGroupIdsByLabelSets.length; idx++) {
     if (Object.keys(metricGroupIdsByLabelSets[idx]).length === 0) {
-      // This set has no metric groups - check if it was due to a regex filter
+      // This set has no metric groups - check if it was due to a regex or value filter
       var regexFilters = [];
-      var regExp = /([^\=]+)\=([^\=]+)/;
-      sets[idx].breakout.forEach((field) => {
-        var matches = regExp.exec(field);
-        if (matches) {
-          var fieldName = matches[1];
-          var value = matches[2];
-          // Check if it's a regex pattern
-          if (/^[rR]./.test(value)) {
-            regexFilters.push({ field: fieldName, pattern: value });
-          }
+      sets[idx].breakout.forEach((entry) => {
+        var bp = parseBreakoutEntry(entry);
+        if (bp.regex) {
+          regexFilters.push({ field: bp.name, pattern: bp.regex });
+        } else if (bp.values) {
+          regexFilters.push({ field: bp.name, pattern: bp.values.join('+') });
         }
       });
 
@@ -3622,19 +3637,14 @@ getMetricDataSets = async function (instance, sets, yearDotMonth) {
     // Build the label-decoder and the remaining breakouts
     dataSets[i].usedBreakouts = sets[i].breakout;
     dataSets[i].valueSeriesLabelDecoder = '';
-    var regExp = /([^\=]+)\=([^\=]+)/;
-    dataSets[i].usedBreakouts.forEach((field) => {
-      var matches = regExp.exec(field);
-      if (matches) {
-        field = matches[1];
-        value = matches[2];
-      }
-      dataSets[i].valueSeriesLabelDecoder += '-' + '<' + field + '>';
-      //TODO: validate if user's breakouts are available by checking against data.breakouts
+    var usedNames = [];
+    dataSets[i].usedBreakouts.forEach((entry) => {
+      var bp = parseBreakoutEntry(entry);
+      usedNames.push(bp.name);
+      dataSets[i].valueSeriesLabelDecoder += '-' + '<' + bp.name + '>';
     });
     dataSets[i].valueSeriesLabelDecoder = dataSets[i].valueSeriesLabelDecoder.replace('-', '');
-    // Breakouts already used should not show up in the list of avauilable breakouts
-    dataSets[i].remainingBreakouts = setBreakouts[i].filter((n) => !dataSets[i].usedBreakouts.includes(n));
+    dataSets[i].remainingBreakouts = setBreakouts[i].filter((n) => !usedNames.includes(n));
   }
 
   for (var i = 0; i < sets.length; i++) {

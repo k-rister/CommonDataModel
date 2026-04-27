@@ -214,10 +214,11 @@ export default function DeepDiveView({ selected, deepDiveMetrics, metricConfigs:
               });
             }).then(function (data) {
               if (abortRef.current) return;
+              var mk = metricKey;
               setMetricData(function (prev) {
                 var next = Object.assign({}, prev);
-                if (!next[metricKey]) next[metricKey] = {};
-                next[metricKey][it.iterationId] = {
+                if (!next[mk]) next[mk] = {};
+                next[mk][it.iterationId] = {
                   values: data.values || {},
                   periodBegin: String(queryBegin),
                   periodEnd: String(queryEnd),
@@ -233,6 +234,8 @@ export default function DeepDiveView({ selected, deepDiveMetrics, metricConfigs:
 
           // Wait for all iterations of this metric to complete before starting next metric
           await Promise.all(promises);
+          // Yield to let React render this metric's data before fetching the next
+          await new Promise(function (resolve) { setTimeout(resolve, 0); });
         }
       })();
     }).catch(function (err) {
@@ -459,6 +462,7 @@ export default function DeepDiveView({ selected, deepDiveMetrics, metricConfigs:
         // Get breakout dimension names from config
         var config = configLookup[metricKey] || {};
         var breakoutNames = (config.breakouts || []).map(function (b) {
+          if (typeof b === 'object' && b !== null && b.name) return b.name;
           var eqIdx = b.indexOf('=');
           return eqIdx >= 0 ? b.substring(0, eqIdx) : b;
         });

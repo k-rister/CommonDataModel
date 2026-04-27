@@ -1771,6 +1771,50 @@ a.run-id:hover {
   padding: 2px 8px !important;
 }
 
+.breakout-aggregate-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  font-size: 10px;
+  cursor: pointer;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.breakout-aggregate-check input {
+  margin: 0;
+}
+
+.compare-breakout-aggregate {
+  border-color: rgba(91, 141, 239, 0.4);
+  background: rgba(91, 141, 239, 0.05);
+}
+
+.breakout-regex-input {
+  width: 90px;
+  padding: 1px 5px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: 10px;
+  font-family: 'SF Mono', ui-monospace, Consolas, monospace;
+  background: var(--surface);
+  color: var(--text);
+  outline: none;
+  flex-shrink: 0;
+}
+
+.breakout-regex-input:focus {
+  border-color: var(--accent);
+}
+
+.breakout-regex-input::placeholder {
+  color: var(--text-muted);
+}
+
+.breakout-regex-invalid {
+  border-color: #ef4444;
+}
+
 .compare-filter-group {
   display: inline-flex;
   align-items: center;
@@ -1974,6 +2018,26 @@ a.run-id:hover {
 
 .compare-yaxis-left {
   transform: rotate(180deg);
+}
+
+.compare-yaxis-dive {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  cursor: pointer;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-muted);
+  margin-top: 8px;
+  white-space: nowrap;
+}
+
+.compare-yaxis-dive input {
+  margin: 0;
+}
+
+.compare-yaxis-dive:hover {
+  color: var(--accent);
 }
 
 .compare-yaxis-right {

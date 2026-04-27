@@ -365,7 +365,8 @@ function renderGroupedBreakouts(items, depth, breakoutNames) {
   var headers = [];
   var commonSuffixes = [];
   for (var h = 0; h < numCols; h++) {
-    var name = (breakoutNames && h < breakoutNames.length) ? breakoutNames[h] : '';
+    var nameEntry = (breakoutNames && h < breakoutNames.length) ? breakoutNames[h] : '';
+    var name = (typeof nameEntry === 'object' && nameEntry !== null && nameEntry.name) ? nameEntry.name : String(nameEntry);
     if (name.indexOf('=') >= 0) name = name.substring(0, name.indexOf('='));
 
     // Collect unique values for this column
@@ -520,6 +521,8 @@ const CompareView = forwardRef(function CompareView({ selected, groupByList, set
   var [breakoutValueCache, setBreakoutValueCache] = useState({}); // { "source::type": { "hostname": ["h1","h2"], ... } }
   var [openBreakoutDropdown, setOpenBreakoutDropdown] = useState(null); // index of metric with open dropdown
   var [breakoutSelections, setBreakoutSelections] = useState({}); // { "dimName": Set of selected values }
+  var [breakoutRegex, setBreakoutRegex] = useState({}); // { "dimName": "regexString" }
+  var [breakoutAggregate, setBreakoutAggregate] = useState({}); // { "dimName": bool }
   var breakoutDropdownRef = useRef(null);
 
   // Close breakout dropdown on outside click
@@ -1188,9 +1191,13 @@ const CompareView = forwardRef(function CompareView({ selected, groupByList, set
                   if (isOpen) {
                     setOpenBreakoutDropdown(null);
                     setBreakoutSelections({});
+                    setBreakoutRegex({});
+                    setBreakoutAggregate({});
                   } else {
                     setOpenBreakoutDropdown(si);
                     setBreakoutSelections({});
+                    setBreakoutRegex({});
+                    setBreakoutAggregate({});
                     fetchBreakoutValues(sm.source, sm.type, sm.remainingBreakouts);
                   }
                 }}>+ Breakout</button>
@@ -1207,12 +1214,53 @@ const CompareView = forwardRef(function CompareView({ selected, groupByList, set
                         <div key={b} className={'breakout-dropdown-item' + (isSingle ? ' breakout-single' : '')}>
                           <div className="breakout-dropdown-values">
                             <span className="breakout-dropdown-label">{b}</span>
+                            {!isSingle && vals && vals.length > 1 && (
+                              <input
+                                className={'breakout-regex-input' + (breakoutRegex[b] && (function () { try { new RegExp(breakoutRegex[b]); return false; } catch (e) { return true; } })() ? ' breakout-regex-invalid' : '')}
+                                type="text"
+                                placeholder="regex filter"
+                                value={breakoutRegex[b] || ''}
+                                onClick={function (e) { e.stopPropagation(); }}
+                                onKeyDown={function (e) { e.stopPropagation(); }}
+                                onChange={function (e) {
+                                  var pattern = e.target.value;
+                                  var dimName = b;
+                                  setBreakoutRegex(function (prev) {
+                                    var next = Object.assign({}, prev);
+                                    if (pattern) { next[dimName] = pattern; } else { delete next[dimName]; }
+                                    return next;
+                                  });
+                                  if (!pattern) {
+                                    setBreakoutSelections(function (prev) {
+                                      var next = Object.assign({}, prev);
+                                      delete next[dimName];
+                                      return next;
+                                    });
+                                    return;
+                                  }
+                                  try {
+                                    var re = new RegExp(pattern);
+                                    var matching = new Set();
+                                    if (vals) {
+                                      vals.forEach(function (v) { if (re.test(v)) matching.add(v); });
+                                    }
+                                    setBreakoutSelections(function (prev) {
+                                      var next = Object.assign({}, prev);
+                                      if (matching.size > 0) { next[dimName] = matching; } else { delete next[dimName]; }
+                                      return next;
+                                    });
+                                  } catch (e) { /* invalid regex — leave selections unchanged */ }
+                                }}
+                              />
+                            )}
                             <span className={'breakout-dropdown-val breakout-val-all' + (!hasSelection || allSelected ? ' breakout-val-selected' : ' breakout-val-unselected')}
                               onClick={function (e) {
                                 e.stopPropagation();
                                 setOpenBreakoutDropdown(null);
                                 setBreakoutSelections({});
-                                handleAddBreakout(si, b);
+                                setBreakoutRegex({});
+                    setBreakoutAggregate({});
+                                handleAddBreakout(si, { name: b });
                               }}
                             >all</span>
                             {vals && vals.map(function (v) {
@@ -1234,13 +1282,28 @@ const CompareView = forwardRef(function CompareView({ selected, groupByList, set
                               );
                             })}
                             {hasSelection && !allSelected && (
+                              <>
+                              <label className="breakout-aggregate-check" onClick={function (e) { e.stopPropagation(); }}>
+                                <input type="checkbox" checked={!!breakoutAggregate[b]} onChange={function () {
+                                  setBreakoutAggregate(function (prev) {
+                                    var next = Object.assign({}, prev);
+                                    next[b] = !prev[b];
+                                    return next;
+                                  });
+                                }} />
+                                <span>Sum</span>
+                              </label>
                               <button className="btn btn-sm btn-secondary breakout-dropdown-add" onClick={function (e) {
                                 e.stopPropagation();
-                                var breakoutStr = b + '=' + Array.from(selected_vals).join('+');
+                                var breakoutObj = { name: b, values: Array.from(selected_vals) };
+                                if (breakoutAggregate[b]) breakoutObj.aggregate = true;
                                 setOpenBreakoutDropdown(null);
                                 setBreakoutSelections({});
-                                handleAddBreakout(si, breakoutStr);
+                                setBreakoutRegex({});
+                                setBreakoutAggregate({});
+                                handleAddBreakout(si, breakoutObj);
                               }}>Add</button>
+                              </>
                             )}
                           </div>
                         </div>
@@ -1292,36 +1355,31 @@ const CompareView = forwardRef(function CompareView({ selected, groupByList, set
               <button className="btn btn-sm btn-secondary" onClick={function () { handleApplyFilter(si); }} disabled={sm.loading} style={{ fontSize: 10, padding: '2px 6px' }}>Apply</button>
             )}
           </span>
-          {deepDiveMetrics && (function () {
-            var metricKey = sm.source + '::' + sm.type;
-            return (
-              <label className="compare-deepdive-check" title="Include in Deep Dive">
-                <input type="checkbox" checked={deepDiveMetrics.has(metricKey)} onChange={function () {
-                  setDeepDiveMetrics(function (prev) {
-                    var next = new Set(prev);
-                    if (next.has(metricKey)) next.delete(metricKey); else next.add(metricKey);
-                    return next;
-                  });
-                }} />
-                <span className="compare-deepdive-label">Dive</span>
-              </label>
-            );
-          })()}
           <button className="compare-metric-remove" onClick={function () { handleRemoveMetric(si); }}>&times;</button>
         </div>
         {sm.breakouts.length > 0 && (
           <div className="compare-metric-breakouts">
             {sm.breakouts.map(function (b, bi) {
-              var eqIdx = b.indexOf('=');
-              var fieldName = eqIdx >= 0 ? b.substring(0, eqIdx) : b;
-              var filterVal = eqIdx >= 0 ? b.substring(eqIdx + 1) : '';
+              var isObj = typeof b === 'object' && b !== null && b.name;
+              var fieldName = isObj ? b.name : (b.indexOf('=') >= 0 ? b.substring(0, b.indexOf('=')) : b);
+              var filterVal = isObj ? (b.values ? b.values.join('+') : (b.regex || '')) : (b.indexOf('=') >= 0 ? b.substring(b.indexOf('=') + 1) : '');
+              var isAggregate = isObj && b.aggregate;
               return (
-                <span key={bi} className="compare-breakout-chip">
-                  <span className="compare-breakout-field">{fieldName}</span>
+                <span key={bi} className={'compare-breakout-chip' + (isAggregate ? ' compare-breakout-aggregate' : '')}>
+                  <span className="compare-breakout-field">{fieldName}{isAggregate ? ' (sum)' : ''}</span>
                   <input className="compare-breakout-filter" type="text" placeholder="all" value={filterVal}
-                    title="Filter: exact value, val1+val2, r/regex/, R/regex/"
+                    title="Filter values"
                     onClick={function (e) { e.stopPropagation(); }}
-                    onChange={function (e) { var newVal = e.target.value; handleUpdateBreakoutFilter(si, bi, newVal ? fieldName + '=' + newVal : fieldName); }}
+                    onChange={function (e) {
+                      var newVal = e.target.value;
+                      if (isObj) {
+                        var updated = Object.assign({}, b);
+                        if (newVal) { updated.values = newVal.split('+'); delete updated.regex; } else { delete updated.values; delete updated.regex; }
+                        handleUpdateBreakoutFilter(si, bi, updated);
+                      } else {
+                        handleUpdateBreakoutFilter(si, bi, newVal ? fieldName + '=' + newVal : fieldName);
+                      }
+                    }}
                     onKeyDown={function (e) { if (e.key === 'Enter') { e.preventDefault(); handleApplyBreakoutFilter(si); } }}
                   />
                   <button onClick={function () { handleRemoveBreakout(si, bi); }}>&times;</button>
@@ -1436,7 +1494,22 @@ const CompareView = forwardRef(function CompareView({ selected, groupByList, set
                 {renderMetricControls(sm, si)}
                 <div className="compare-panel-metric">
                   <div className="compare-chart-with-labels">
-                    <div className="compare-yaxis-label compare-yaxis-left" style={{ color: color }}>{sm.source}::{sm.type}</div>
+                    <div className="compare-yaxis-label compare-yaxis-left" style={{ color: color }}>
+                      {sm.source}::{sm.type}
+                      {deepDiveMetrics && (
+                        <label className="compare-yaxis-dive" onClick={function (e) { e.stopPropagation(); }}>
+                          <input type="checkbox" checked={deepDiveMetrics.has(sm.source + '::' + sm.type)} onChange={function () {
+                            var metricKey = sm.source + '::' + sm.type;
+                            setDeepDiveMetrics(function (prev) {
+                              var next = new Set(prev);
+                              if (next.has(metricKey)) next.delete(metricKey); else next.add(metricKey);
+                              return next;
+                            });
+                          }} />
+                          <span>Dive</span>
+                        </label>
+                      )}
+                    </div>
                     <div className="compare-chart-area" style={{ width: Math.max(600, nonGapData.length * 120 + 120), flex: 'none' }}>
                   <ResponsiveContainer width="100%" height={180}>
                     <ComposedChart data={chart.data} margin={{ top: 10, right: 30, left: 60, bottom: 5 }} barCategoryGap="10%">
@@ -1642,7 +1715,22 @@ const CompareView = forwardRef(function CompareView({ selected, groupByList, set
                 <React.Fragment key={'panel-' + si}>
                 <div className="compare-panel-metric">
                   <div className="compare-chart-with-labels">
-                    <div className="compare-yaxis-label compare-yaxis-left" style={{ color: color }}>{sm.source}::{sm.type}</div>
+                    <div className="compare-yaxis-label compare-yaxis-left" style={{ color: color }}>
+                      {sm.source}::{sm.type}
+                      {deepDiveMetrics && (
+                        <label className="compare-yaxis-dive" onClick={function (e) { e.stopPropagation(); }}>
+                          <input type="checkbox" checked={deepDiveMetrics.has(sm.source + '::' + sm.type)} onChange={function () {
+                            var metricKey = sm.source + '::' + sm.type;
+                            setDeepDiveMetrics(function (prev) {
+                              var next = new Set(prev);
+                              if (next.has(metricKey)) next.delete(metricKey); else next.add(metricKey);
+                              return next;
+                            });
+                          }} />
+                          <span>Dive</span>
+                        </label>
+                      )}
+                    </div>
                     <div className="compare-chart-area" style={{ width: Math.max(600, nonGapData.length * 120 + 120), flex: 'none' }}>
                   <ResponsiveContainer width="100%" height={180}>
                     <ComposedChart data={chart.data} margin={{ top: 10, right: 30, left: 60, bottom: 5 }} barCategoryGap="10%">
@@ -1823,7 +1911,21 @@ const CompareView = forwardRef(function CompareView({ selected, groupByList, set
             })}
 
             <div className="compare-chart-with-labels">
-              <div className="compare-yaxis-label compare-yaxis-left">{chart.metricName}</div>
+              <div className="compare-yaxis-label compare-yaxis-left">
+                {chart.metricName}
+                {deepDiveMetrics && (
+                  <label className="compare-yaxis-dive" onClick={function (e) { e.stopPropagation(); }}>
+                    <input type="checkbox" checked={deepDiveMetrics.has(chart.metricName)} onChange={function () {
+                      setDeepDiveMetrics(function (prev) {
+                        var next = new Set(prev);
+                        if (next.has(chart.metricName)) next.delete(chart.metricName); else next.add(chart.metricName);
+                        return next;
+                      });
+                    }} />
+                    <span>Dive</span>
+                  </label>
+                )}
+              </div>
               <div className="compare-chart-scroll">
               <div className="compare-chart-area" style={{ width: Math.max(600, nonGapData.length * 120 + 120) }}>
             {/* Toolbar: hidden dims, add, auto, clear — above headers */}
@@ -2181,18 +2283,6 @@ const CompareView = forwardRef(function CompareView({ selected, groupByList, set
                       Refine {pmStr}
                     </button>
                   )}
-                  {deepDiveMetrics && (
-                    <label className="compare-deepdive-check" title="Include in Deep Dive">
-                      <input type="checkbox" checked={deepDiveMetrics.has(pmStr)} onChange={function () {
-                        setDeepDiveMetrics(function (prev) {
-                          var next = new Set(prev);
-                          if (next.has(pmStr)) next.delete(pmStr); else next.add(pmStr);
-                          return next;
-                        });
-                      }} />
-                      <span className="compare-deepdive-label">Dive</span>
-                    </label>
-                  )}
                 </div>
               );
             })()}
@@ -2219,7 +2309,22 @@ const CompareView = forwardRef(function CompareView({ selected, groupByList, set
                 <React.Fragment key={'panel-' + si}>
                 <div className="compare-panel-metric">
                   <div className="compare-chart-with-labels">
-                    <div className="compare-yaxis-label compare-yaxis-left" style={{ color: color }}>{sm.source}::{sm.type}</div>
+                    <div className="compare-yaxis-label compare-yaxis-left" style={{ color: color }}>
+                      {sm.source}::{sm.type}
+                      {deepDiveMetrics && (
+                        <label className="compare-yaxis-dive" onClick={function (e) { e.stopPropagation(); }}>
+                          <input type="checkbox" checked={deepDiveMetrics.has(sm.source + '::' + sm.type)} onChange={function () {
+                            var metricKey = sm.source + '::' + sm.type;
+                            setDeepDiveMetrics(function (prev) {
+                              var next = new Set(prev);
+                              if (next.has(metricKey)) next.delete(metricKey); else next.add(metricKey);
+                              return next;
+                            });
+                          }} />
+                          <span>Dive</span>
+                        </label>
+                      )}
+                    </div>
                     <div className="compare-chart-area" style={{ width: Math.max(600, nonGapData.length * 120 + 120), flex: 'none' }}>
                   <ResponsiveContainer width="100%" height={180}>
                     <ComposedChart data={chart.data} margin={{ top: 10, right: 30, left: 60, bottom: 5 }} barCategoryGap="10%">
