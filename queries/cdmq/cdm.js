@@ -342,7 +342,9 @@ indexDefs['v8dev']['metric_desc']['mappings']['properties']['metric_desc'] = {
         batch: { type: 'keyword' },
         slot: { type: 'keyword' },
         blade: { type: 'keyword' },
-        rank: { type: 'keyword' }
+        rank: { type: 'keyword' },
+        queue: { type: 'keyword' },
+        nic: { type: 'keyword' }
       }
     },
     'value-format': { type: 'keyword' },
