@@ -399,6 +399,8 @@ indexDefs['v8dev']['metric_data']['mappings']['properties']['metric_data'] = {
 };
 indexDefs['v9dev']['metric_data'] = deepClone(indexDefs['v8dev']['metric_data']);
 
+exports.indexDefs = indexDefs;
+
 // --------------------------------------------------------------------------------------------------------------
 function memUsage() {
   if (debugOut == 0) return;
@@ -514,6 +516,62 @@ checkCreateIndex = function (instance, index) {
 exports.checkCreateIndex = checkCreateIndex;
 
 // --------------------------------------------------------------------------------------------------------------
+getMappingFieldPaths = function (properties, prefix) {
+  const paths = new Set();
+  for (const key of Object.keys(properties)) {
+    const path = prefix ? prefix + '.' + key : key;
+    if (properties[key].properties) {
+      for (const subPath of getMappingFieldPaths(properties[key].properties, path)) {
+        paths.add(subPath);
+      }
+    } else {
+      paths.add(path);
+    }
+  }
+  return paths;
+};
+exports.getMappingFieldPaths = getMappingFieldPaths;
+
+// --------------------------------------------------------------------------------------------------------------
+updateIndexMappings = function (instance, index) {
+  var indices = index.includes(',') ? index.split(',') : [index];
+
+  for (var idx = 0; idx < indices.length; idx++) {
+    var thisIndex = indices[idx];
+
+    var resp = getCdmVerFromIndex(thisIndex);
+    if (resp['ret-code'] != 0) {
+      console.error('ERROR: updateIndexMappings: getCdmVerFromIndex returned ' + resp['ret-msg']);
+      return createResponse(1, resp['ret-msg']);
+    }
+    var cdmVer = resp['cdm-ver'];
+
+    resp = getDocType(thisIndex);
+    if (resp['ret-code'] != 0) {
+      console.error('ERROR: updateIndexMappings: getDocType returned ' + resp['ret-msg']);
+      return createResponse(1, resp['ret-msg']);
+    }
+    var docType = resp['doc-type'];
+
+    var url = 'http://' + instance['host'] + '/' + thisIndex + '/_mapping';
+    debuglog('updateIndexMappings: PUT ' + url);
+    resp = request('PUT', url, {
+      headers: instance['header'],
+      body: JSON.stringify(indexDefs[cdmVer][docType]['mappings'])
+    });
+    var data = JSON.parse(resp.getBody());
+    if (data['error']) {
+      console.error('ERROR: updateIndexMappings: ' + JSON.stringify(data['error']));
+      return createResponse(1, JSON.stringify(data['error']));
+    }
+    debuglog('updateIndexMappings response: ' + JSON.stringify(data, null, 2));
+  }
+
+  return createResponse(0, 'INFO: updateIndexMappings completed for ' + indices.length + ' index(es)');
+};
+exports.updateIndexMappings = updateIndexMappings;
+
+// --------------------------------------------------------------------------------------------------------------
 function getDocType(index) {
   var retMsg = '';
   var retCode = 0;
@@ -531,7 +589,7 @@ function getDocType(index) {
     if (matches) {
       docType = matches[1];
       if (docTypes[cdmVer].includes(docType)) {
-        return docType;
+        return createResponse(retCode, retMsg, { 'doc-type': docType });
       } else {
         retMsg = 'ERROR: index [' + index + '] does not match a docType: ' + docTypes[cdmVer];
         retCode = 1;

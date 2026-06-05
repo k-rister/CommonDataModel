@@ -5,6 +5,19 @@ const { Readable } = require('stream');
 const cdm = require('./cdm');
 const fs = require('fs');
 
+function collectFieldPaths(obj, prefix) {
+  const paths = [];
+  for (const key of Object.keys(obj)) {
+    const path = prefix ? prefix + '.' + key : key;
+    if (typeof obj[key] === 'object' && obj[key] !== null && !Array.isArray(obj[key])) {
+      paths.push(...collectFieldPaths(obj[key], path));
+    } else {
+      paths.push(path);
+    }
+  }
+  return paths;
+}
+
 // Read an xz file and decompress to string
 async function decompressXzFile(filename) {
   debuglog('decompressXzFile: reading ' + filename);
@@ -22,7 +35,7 @@ async function decompressXzFile(filename) {
 module.exports = async ({ instance, filePath, docTypes, mode }) => {
   const maxLength = 4000000;
   const jsonArr = [];
-  const info = { runIds: {} };
+  const info = { runIds: {}, docFields: {} };
   const regExp = /\.ndjson\.xz$/;
   var docTypeCounts = {};
   if (mode == 'index') {
@@ -80,6 +93,16 @@ module.exports = async ({ instance, filePath, docTypes, mode }) => {
         const matches = regExp.exec(indexName);
         if (matches) {
           const cdmVer = matches[1];
+          const docType = matches[2];
+          const fieldPaths = collectFieldPaths(doc);
+          if (!info.docFields[docType]) {
+            info.docFields[docType] = [];
+          }
+          for (const fp of fieldPaths) {
+            if (!info.docFields[docType].includes(fp)) {
+              info.docFields[docType].push(fp);
+            }
+          }
           let yearDotMonth = '';
           let runId = '';
           if (cdmVer == 'v7dev') {
