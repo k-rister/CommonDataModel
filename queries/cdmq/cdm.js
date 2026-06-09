@@ -344,7 +344,9 @@ indexDefs['v8dev']['metric_desc']['mappings']['properties']['metric_desc'] = {
         blade: { type: 'keyword' },
         rank: { type: 'keyword' },
         queue: { type: 'keyword' },
-        nic: { type: 'keyword' }
+        nic: { type: 'keyword' },
+        mempool_name: { type: 'keyword' },
+        function: { type: 'keyword' }
       }
     },
     'value-format': { type: 'keyword' },
