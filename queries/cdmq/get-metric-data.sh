@@ -13,21 +13,11 @@
 
 project_dir=$(dirname `readlink -e $0`)
 pushd "$project_dir" >/dev/null
-if ! command -v npm >/dev/null 2>&1; then
-    echo "Error: npm is not installed. Please install Node.js and npm." >&2
+if [ ! -d node_modules ]; then
+    echo "Error: node_modules not found. Run start-server.sh or 'npm install' in $project_dir first." >&2
     popd >/dev/null
     exit 1
 fi
-echo "Resolving cdmq dependencies..." >&2
-npm_output=$(npm install --no-fund --no-audit 2>&1)
-npm_rc=$?
-if [ $npm_rc -ne 0 ]; then
-    echo "ERROR: npm install failed (rc=$npm_rc):" >&2
-    echo "$npm_output" >&2
-    popd >/dev/null
-    exit 1
-fi
-echo "$npm_output" | tail -1 >&2
 node ./get-metric-data.js "$@"
 rc=$?
 popd >/dev/null
