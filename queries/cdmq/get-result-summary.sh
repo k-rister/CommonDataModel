@@ -19,7 +19,15 @@ if ! command -v npm >/dev/null 2>&1; then
     exit 1
 fi
 echo "Resolving cdmq dependencies..." >&2
-npm install --no-fund --no-audit 2>&1 | tail -1 >&2
+npm_output=$(npm install --no-fund --no-audit 2>&1)
+npm_rc=$?
+if [ $npm_rc -ne 0 ]; then
+    echo "ERROR: npm install failed (rc=$npm_rc):" >&2
+    echo "$npm_output" >&2
+    popd >/dev/null
+    exit 1
+fi
+echo "$npm_output" | tail -1 >&2
 node ./get-result-summary.js "$@"
 rc=$?
 popd >/dev/null

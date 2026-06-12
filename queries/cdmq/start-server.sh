@@ -24,7 +24,15 @@ fi
 # Install dependencies only when package-lock.json is newer than last install
 if [ ! -f "node_modules/.install-stamp" ] || [ "package-lock.json" -nt "node_modules/.install-stamp" ]; then
     echo "Installing cdmq dependencies..."
-    npm ci --no-fund --no-audit 2>&1 | tail -1
+    npm_output=$(npm ci --no-fund --no-audit 2>&1)
+    npm_rc=$?
+    if [ $npm_rc -ne 0 ]; then
+        echo "ERROR: npm ci failed (rc=$npm_rc):" >&2
+        echo "$npm_output" >&2
+        popd >/dev/null
+        exit 1
+    fi
+    echo "$npm_output" | tail -1
     touch node_modules/.install-stamp
 else
     echo "cdmq dependencies up to date"
@@ -35,7 +43,16 @@ if [ -d "web-ui" ] && [ -f "web-ui/package.json" ]; then
     pushd web-ui >/dev/null
     if [ ! -f "node_modules/.install-stamp" ] || [ "package-lock.json" -nt "node_modules/.install-stamp" ]; then
         echo "Installing web UI dependencies..."
-        npm ci --no-fund --no-audit 2>&1 | tail -1
+        npm_output=$(npm ci --no-fund --no-audit 2>&1)
+        npm_rc=$?
+        if [ $npm_rc -ne 0 ]; then
+            echo "ERROR: web UI npm ci failed (rc=$npm_rc):" >&2
+            echo "$npm_output" >&2
+            popd >/dev/null
+            popd >/dev/null
+            exit 1
+        fi
+        echo "$npm_output" | tail -1
         touch node_modules/.install-stamp
     fi
     # Rebuild if any source file is newer than the dist
