@@ -158,24 +158,47 @@ async function main() {
           process.exit(1);
         }
         instance['ver'] = cdmVer;
-        //if (!Object.keys(instance['indices']).includes(cdmVer)) {
-        //instance['indices'][cdmVer] = [];
-        //}
       } else {
         console.log('ERROR: there was not exactly one CDM version found in the data to be indexed:\n');
         console.log(Object.keys(info['indices']));
         console.log('info\n' + JSON.stringify(info['indices'], null, 2));
         process.exit(1);
       }
-      // For cdmv9 and newer, any time a document is to be indexed, it is imperitive
-      // that a check for the existence of the index is done, and if not found, create
-      // the index with the *correct* mappings and settings.  If this is not done, an index
-      // may be auto-created with the *incorrect* mappings and settings, and documents can
-      // be indexed, but not properly, and subsequent queries will *NOT* work.
+      if (info.docFields) {
+        var unknownFields = {};
+        var hasUnknown = false;
+        for (const docType of Object.keys(info.docFields)) {
+          if (!cdm.indexDefs[cdmVer] || !cdm.indexDefs[cdmVer][docType]) {
+            console.error('ERROR: no index definition found for ' + cdmVer + '/' + docType);
+            process.exit(1);
+          }
+          const validPaths = cdm.getMappingFieldPaths(cdm.indexDefs[cdmVer][docType]['mappings']['properties']);
+          for (const fieldPath of info.docFields[docType]) {
+            if (!validPaths.has(fieldPath)) {
+              if (!unknownFields[docType]) {
+                unknownFields[docType] = [];
+              }
+              unknownFields[docType].push(fieldPath);
+              hasUnknown = true;
+            }
+          }
+        }
+        if (hasUnknown) {
+          console.error('ERROR: documents contain fields not defined in indexDefs:');
+          for (const docType of Object.keys(unknownFields)) {
+            console.error('  ' + docType + ': ' + unknownFields[docType].join(', '));
+          }
+          console.error('These fields must be added to indexDefs in cdm.js before indexing.');
+          process.exit(1);
+        }
+        console.log('Document field validation passed');
+      }
+
       debuglog(JSON.stringify(info['runIds'][runId]['indices'][cdmVer], null, 2));
       for (var i = 0; i < info['runIds'][runId]['indices'][cdmVer].length; i++) {
         debuglog('checking for index ' + info['runIds'][runId]['indices'][cdmVer][i]);
         cdm.checkCreateIndex(instance, info['runIds'][runId]['indices'][cdmVer][i]);
+        cdm.updateIndexMappings(instance, info['runIds'][runId]['indices'][cdmVer][i]);
       }
       // Before indexing any documents, we must check for any existing ones.  Having duplicate
       // documents is really bad
