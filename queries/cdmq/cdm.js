@@ -2314,7 +2314,7 @@ getIters = async function (
   });
 
   if (jsonArr.length > 0) {
-    var responses = esJsonArrRequest(instance, 'tag', '/_msearch', jsonArr);
+    var responses = await esJsonArrRequest(instance, 'tag', '/_msearch', jsonArr);
     var runIds = [];
     responses.forEach((response) => {
       var theseRunIds = [];
@@ -2326,7 +2326,7 @@ getIters = async function (
     var intersectedRunIds = intersectAllArrays(runIds);
 
     if (jsonArr2.length > 0) {
-      var responses2 = esJsonArrRequest(instance, 'tag', '/_msearch', jsonArr2);
+      var responses2 = await esJsonArrRequest(instance, 'tag', '/_msearch', jsonArr2);
       responses2.forEach((response) => {
         response.hits.hits.forEach((run) => {
           if (intersectedRunIds.includes(run._source.run['run-uuid'])) {
@@ -2378,8 +2378,7 @@ getIters = async function (
 
   var iterIdsFromParam = [];
   if (jsonArr.length > 0) {
-    var resp = esJsonArrRequest(instance, 'param', '/_msearch', jsonArr);
-    var responses = JSON.parse(resp.getBody());
+    var responses = await esJsonArrRequest(instance, 'param', '/_msearch', jsonArr);
     var iterationIds = [];
     responses.forEach((response) => {
       var theseIterationIds = [];
@@ -2391,8 +2390,7 @@ getIters = async function (
     iterIdsFromParam = intersectAllArrays(iterationIds);
 
     if (jsonArr2 != '') {
-      var resp2 = esJsonArrRequest(instance, 'tag', '/_msearch', jsonArr2);
-      var responses2 = JSON.parse(resp2.getBody());
+      var responses2 = await esJsonArrRequest(instance, 'tag', '/_msearch', jsonArr2);
       responses2.forEach((response) => {
         response.hits.hits.forEach((hit) => {
           if (iterIdsFromParam.includes(hit._source.iteration['iteration-uuid'])) {
