@@ -1029,7 +1029,7 @@ mSearch = async function (instance, index, yearDotMonth, termKeys, values, sourc
                 console.log(
                   'WARNING: the requested source for this query [' + source + '] does not exist in the returned data:\n'
                 );
-                console.log(JSON.stringify(obj.null, 2));
+                console.log(JSON.stringify(obj, null, 2));
                 return;
               }
               obj = obj[thisObj];
