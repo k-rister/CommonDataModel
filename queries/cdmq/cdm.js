@@ -2435,7 +2435,7 @@ getIters = async function (
       }
     });
   }
-  if (isDefined(addIterations) && addRuns != []) {
+  if (isDefined(addIterations) && addIterations != []) {
     addIterations.forEach((id) => {
       if (!allIterIds.includes(id)) {
         allIterIds.push(id);
