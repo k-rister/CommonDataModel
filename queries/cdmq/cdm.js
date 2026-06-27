@@ -3540,7 +3540,7 @@ getMetricDataSets = async function (instance, sets, yearDotMonth) {
         }
         sets[i].end = periodRange.end;
       } else {
-        retMag = 'ERROR: end is not defined or a period was not defined';
+        retMsg = 'ERROR: end is not defined or a period was not defined';
         retCode = 2;
         return { 'data-sets': [], 'ret-code': retCode, 'ret-msg': retMsg };
       }
