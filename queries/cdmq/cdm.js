@@ -3605,7 +3605,7 @@ getMetricDataSets = async function (instance, sets, yearDotMonth) {
 
   // Ensure that any breakouts are available for each set
   for (var i = 0; i < sets.length; i++) {
-    if (sets[i].breakout != 'undefined') {
+    if (isDefined(sets[i].breakout)) {
       for (var j = 0; j < sets[i].breakout.length; j++) {
         var breakout = parseBreakoutEntry(sets[i].breakout[j]).name;
         if (!setBreakouts[i].includes(breakout)) {
