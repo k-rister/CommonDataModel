@@ -2896,7 +2896,6 @@ mgetMetricIdsFromTerms = async function (instance, termsSets, yearDotMonth) {
       ') did not match number of requests (' +
       totalReqs +
       ')';
-    retMsg = 'ERROR: mgetMetricIdsFromTerms(), terms[' + i + ']  must have either a period-id or run-id';
     retCode = 2;
     return { 'metric-id-sets': metricIdsSets, 'ret-code': retCode, 'ret-msg': retMsg };
   }
