@@ -1637,7 +1637,7 @@ app.post('/api/v1/metric-data', async (req, res) => {
         error: resp['ret-msg']
       });
     }
-    metric_data = resp['data-sets'][0];
+    var metric_data = resp['data-sets'][0];
 
     var labelCount = metric_data && metric_data.values ? Object.keys(metric_data.values).length : 0;
     var elapsed = Date.now() - reqStart;
