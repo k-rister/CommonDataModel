@@ -148,7 +148,7 @@ async function main() {
     )
     .option(
       '--end [uint]',
-      "[optional] Timestamp in epochtime_ms, within the period's begin-end time range, where the calculation of the metric will end.  If no --begin and no -end are provided, a begin and end timestamp will be derived based on when all metrics of this source and type have data present.  If --begin is before or --end is after these derived begin/end vaules, they will be adjusted (--begin is increased and/or --end is decreased) to fit within this range."
+      "[optional] Timestamp in epochtime_ms, within the period's begin-end time range, where the calculation of the metric will end.  If no --begin and no -end are provided, a begin and end timestamp will be derived based on when all metrics of this source and type have data present.  If --begin is before or --end is after these derived begin/end values, they will be adjusted (--begin is increased and/or --end is decreased) to fit within this range."
     )
     .option('--resolution [uint]', '[optional] The number of datapoints to produce in a data-series', 1)
     .option(
@@ -159,7 +159,7 @@ async function main() {
     )
     .option(
       '--filter <gt|ge|lt|le:value>',
-      '[optional] Filter out (do not output) metrics which do not pass the conditional.  gt=greather-than, ge=greater-than-or-equal, lt=less-than, le=less-than-or-equal'
+      '[optional] Filter out (do not output) metrics which do not pass the conditional.  gt=greater-than, ge=greater-than-or-equal, lt=less-than, le=less-than-or-equal'
     )
     .option('--output-format <json|table|csv>', 'table')
     .option(

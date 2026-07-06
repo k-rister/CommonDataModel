@@ -76,7 +76,7 @@ module.exports = async ({ instance, filePath, docTypes, mode }) => {
         var action = JSON.parse(jsonArr[k - 1]);
         var doc = JSON.parse(jsonArr[k]);
       } catch (jsonError) {
-        console.log('Could not porse: [' + jsonArr[k] + ']');
+        console.log('Could not parse: [' + jsonArr[k] + ']');
         continue;
       }
       let runId = doc['run']['run-uuid'];
