@@ -163,8 +163,8 @@ async function main() {
     )
     .option('--output-format <json|table|csv>', 'table')
     .option(
-      '--date-format <default|eopch_ms>',
-      '[optional] otuput date/time in DD-MM-YYYY HH:MM:SS (the default) or epoch time in milliseconds',
+      '--date-format <default|epoch_ms>',
+      '[optional] output date/time in DD-MM-YYYY HH:MM:SS (the default) or epoch time in milliseconds',
       'default'
     )
     .option(
