@@ -523,6 +523,8 @@ async function main() {
       thisIteration['results'] = [];
       for (var k = 0; k < primaryMetrics.length; k++) {
         var sourceType = primaryMetrics[k].split('::');
+        var source = sourceType.length == 2 ? sourceType[0] : benchmarks[0];
+        var type = sourceType.length == 2 ? sourceType[1] : primaryMetrics[k];
         var thisValue = {};
         if (allBenchMsampleCount[k] > 0) {
           var mean = allBenchMsampleTotal[k] / allBenchMsampleCount[k];
@@ -535,9 +537,9 @@ async function main() {
           var mstddevpct = (100 * mstddev) / mean;
           logOutput(
             '            result: (' +
-              sourceType[0] +
+              source +
               '::' +
-              sourceType[1] +
+              type +
               ') samples:' +
               allBenchMsampleFixedList[k] +
               ' mean: ' +
