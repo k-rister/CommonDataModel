@@ -83,7 +83,7 @@ async function main() {
     cdm.deleteDocs(instance, allDocTypes, q, yearDotMonth);
     const numDocTypes = await cdm.waitForDeletedDocs(instance, program.run, allDocTypes, yearDotMonth);
     if (numDocTypes > 0) {
-      console.log('Warning: could not delete all documents for ' + docTypes + ' with ' + numAttempts);
+      console.log('Warning: could not delete all documents for ' + numDocTypes + ' remaining doc type(s)');
       console.log(
         'These documents may continue to be deleted in the background.  To check on the status, run this utility again'
       );
