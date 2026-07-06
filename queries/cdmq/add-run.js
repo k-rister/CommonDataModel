@@ -160,8 +160,8 @@ async function main() {
         instance['ver'] = cdmVer;
       } else {
         console.log('ERROR: there was not exactly one CDM version found in the data to be indexed:\n');
-        console.log(Object.keys(info['indices']));
-        console.log('info\n' + JSON.stringify(info['indices'], null, 2));
+        console.log(Object.keys(info['runIds'][runId]['indices']));
+        console.log('info\n' + JSON.stringify(info['runIds'][runId]['indices'], null, 2));
         process.exit(1);
       }
       if (info.docFields) {
