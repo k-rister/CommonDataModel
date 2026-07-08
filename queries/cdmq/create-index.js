@@ -24,7 +24,7 @@ function save_ver(ver) {
     console.log('You must specify a --host before a --ver');
     process.exit(1);
   }
-  if (/^v[7|8|9]dev$/.exec(ver)) {
+  if (/^v[789]dev$/.exec(ver)) {
     instances[instances.length - 1]['ver'] = ver;
   } else {
     console.log('The version must be v7dev, v8dev, or v9dev, not: ' + ver);
@@ -50,7 +50,7 @@ async function main() {
   if (program.index) {
     cdm.checkCreateIndex(instances[instances.length - 1], program.index);
   } else {
-    console.log('--index <index-nane> is required');
+    console.log('--index <index-name> is required');
   }
   console.log('create-index is complete');
 }

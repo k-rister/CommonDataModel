@@ -105,7 +105,7 @@ function save_ver(ver) {
     console.log('You must specify a --host before a --ver');
     process.exit(1);
   }
-  if (/^v[7|8|9]dev$/.exec(ver)) {
+  if (/^v[789]dev$/.exec(ver)) {
     program.instances[program.instances.length - 1]['ver'] = ver;
   } else {
     console.log('The version must be v7dev, v8dev, or v9dev, not: ' + ver);
@@ -148,7 +148,7 @@ async function main() {
     )
     .option(
       '--end [uint]',
-      "[optional] Timestamp in epochtime_ms, within the period's begin-end time range, where the calculation of the metric will end.  If no --begin and no -end are provided, a begin and end timestamp will be derived based on when all metrics of this source and type have data present.  If --begin is before or --end is after these derived begin/end vaules, they will be adjusted (--begin is increased and/or --end is decreased) to fit within this range."
+      "[optional] Timestamp in epochtime_ms, within the period's begin-end time range, where the calculation of the metric will end.  If no --begin and no -end are provided, a begin and end timestamp will be derived based on when all metrics of this source and type have data present.  If --begin is before or --end is after these derived begin/end values, they will be adjusted (--begin is increased and/or --end is decreased) to fit within this range."
     )
     .option('--resolution [uint]', '[optional] The number of datapoints to produce in a data-series', 1)
     .option(
@@ -159,12 +159,12 @@ async function main() {
     )
     .option(
       '--filter <gt|ge|lt|le:value>',
-      '[optional] Filter out (do not output) metrics which do not pass the conditional.  gt=greather-than, ge=greater-than-or-equal, lt=less-than, le=less-than-or-equal'
+      '[optional] Filter out (do not output) metrics which do not pass the conditional.  gt=greater-than, ge=greater-than-or-equal, lt=less-than, le=less-than-or-equal'
     )
     .option('--output-format <json|table|csv>', 'table')
     .option(
-      '--date-format <default|eopch_ms>',
-      '[optional] otuput date/time in DD-MM-YYYY HH:MM:SS (the default) or epoch time in milliseconds',
+      '--date-format <default|epoch_ms>',
+      '[optional] output date/time in DD-MM-YYYY HH:MM:SS (the default) or epoch time in milliseconds',
       'default'
     )
     .option(

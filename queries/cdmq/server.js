@@ -67,7 +67,7 @@ function save_ver(ver) {
     console.log('You must specify a --host before a --ver');
     process.exit(1);
   }
-  if (/^v[7|8|9]dev$/.exec(ver)) {
+  if (/^v[789]dev$/.exec(ver)) {
     instances[instances.length - 1]['ver'] = ver;
   } else {
     console.log('The version must be v7dev, v8dev, or v9dev, not: ' + ver);

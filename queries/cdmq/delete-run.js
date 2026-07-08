@@ -23,7 +23,7 @@ function save_ver(ver) {
     console.log('You must specify a --host before a --ver');
     process.exit(1);
   }
-  if (/^v[7|8|9]dev$/.exec(ver)) {
+  if (/^v[789]dev$/.exec(ver)) {
     instances[instances.length - 1]['ver'] = ver;
   } else {
     console.log('The version must be v7dev, v8dev, or v9dev, not: ' + ver);
@@ -83,7 +83,7 @@ async function main() {
     cdm.deleteDocs(instance, allDocTypes, q, yearDotMonth);
     const numDocTypes = await cdm.waitForDeletedDocs(instance, program.run, allDocTypes, yearDotMonth);
     if (numDocTypes > 0) {
-      console.log('Warning: could not delete all documents for ' + docTypes + ' with ' + numAttempts);
+      console.log('Warning: could not delete all documents for ' + numDocTypes + ' remaining doc type(s)');
       console.log(
         'These documents may continue to be deleted in the background.  To check on the status, run this utility again'
       );

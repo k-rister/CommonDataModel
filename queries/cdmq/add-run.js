@@ -29,7 +29,7 @@ function save_ver(ver) {
     console.log('You must specify a --host before a --ver');
     process.exit(1);
   }
-  if (/^v[7|8|9]dev$/.exec(ver)) {
+  if (/^v[789]dev$/.exec(ver)) {
     instances[instances.length - 1]['ver'] = ver;
   } else {
     console.log('The version must be v7dev, v8dev, or v9dev, not: ' + ver);
@@ -160,8 +160,8 @@ async function main() {
         instance['ver'] = cdmVer;
       } else {
         console.log('ERROR: there was not exactly one CDM version found in the data to be indexed:\n');
-        console.log(Object.keys(info['indices']));
-        console.log('info\n' + JSON.stringify(info['indices'], null, 2));
+        console.log(Object.keys(info['runIds'][runId]['indices']));
+        console.log('info\n' + JSON.stringify(info['runIds'][runId]['indices'], null, 2));
         process.exit(1);
       }
       if (info.docFields) {

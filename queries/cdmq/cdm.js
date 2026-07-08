@@ -368,12 +368,12 @@ indexDefs['v9dev']['metric_desc'] = deepClone(indexDefs['v8dev']['metric_desc'])
 //
 // For example, for mpstat:
 // <doc1>
-// mestric_desc-uuid:  same uuid in metric_desc doc that has source: mpstat, type: Busy-CPU
+// metric_desc-uuid:  same uuid in metric_desc doc that has source: mpstat, type: Busy-CPU
 // name: cpu
 // definition: A logical CPU ID, as found in lscpu, /proc/cpu, and /sys/devices/system/cpu/cpu*
 //
 // <doc2>
-// mestric_desc-uuid:  same uuid in metric_desc doc that has source: mpstat, type: Busy-CPU
+// metric_desc-uuid:  same uuid in metric_desc doc that has source: mpstat, type: Busy-CPU
 // name: package
 // definition: The ID of a physical grouping of CPU cores on a single chip.  Often the same as a NUMA node ID.
 indexDefs['v9dev']['metric_def'] = deepClone(indexDefs['v9dev']['period']);
@@ -1014,7 +1014,7 @@ mSearch = async function (instance, index, yearDotMonth, termKeys, values, sourc
               i +
               '].hits.hits.length (' +
               responses[i].hits.hits.length +
-              ') are not equal, which means the retured data is probably incomplete'
+              ') are not equal, which means the returned data is probably incomplete'
           );
         }
         var ids = [];
@@ -2221,7 +2221,7 @@ reportIters = function (iterTree, indent, count) {
       return count;
     }
   } else {
-    // We should be at a leaf of the tree.  Anything in breakout[] should be params or tags which were reqsuested to not break-out
+    // We should be at a leaf of the tree.  Anything in breakout[] should be params or tags which were requested to not break-out
     const sorted = iterTree.iterations.sort((a, b) =>
       a.labels.localeCompare(b.labels, undefined, {
         numeric: true,
@@ -2246,7 +2246,7 @@ reportIters = function (iterTree, indent, count) {
 };
 
 // --------------------------------------------------------------------------------------------------------------
-// getIters(): filter and group interations, typically for generating comparisons (clustered bar graphs)
+// getIters(): filter and group iterations, typically for generating comparisons (clustered bar graphs)
 getIters = async function (
   instance,
   filterByAge,
@@ -3324,7 +3324,7 @@ calcAvg = function (thisBegin, thisEnd, responses, jsonArrIdx, jsonArrTracker, n
           jsonArrIdx / 2 +
           '].hits.hits.length (' +
           responses[jsonArrIdx / 2].hits.hits.length +
-          ') are not equal, which means the retured data is probably incomplete'
+          ') are not equal, which means the returned data is probably incomplete'
       );
     }
     responses[jsonArrIdx / 2].hits.hits.forEach((element) => {
@@ -3577,7 +3577,7 @@ getMetricDataSets = async function (instance, sets, yearDotMonth) {
   for (var i = 0; i < sets.length; i++) {
     if (!metricSources[i].includes(sets[i].source)) {
       retMsg = 'ERROR: the metric-source [' + sets[i].source + '] was not found in run [' + sets[i].run + ']\n';
-      retMsg += 'The available soucres for this run are: ' + metricSources[i];
+      retMsg += 'The available sources for this run are: ' + metricSources[i];
       retCode = 1;
       return { 'ret-code': retCode, 'ret-msg': retMsg };
     }
