@@ -275,6 +275,8 @@ indexDefs['v8dev']['metric_desc']['mappings']['properties']['metric_desc'] = {
         port: { type: 'keyword' },
         tx_port: { type: 'keyword' },
         rx_port: { type: 'keyword' },
+        fwd_interface: { type: 'keyword' },
+        rev_interface: { type: 'keyword' },
         port_pair: { type: 'keyword' },
         status: { type: 'keyword' },
         error: { type: 'keyword' },
