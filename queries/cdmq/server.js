@@ -36,6 +36,22 @@ function serverError(msg, reqId) {
   logStream.write(line + '\n');
 }
 
+// Validate that a request body contains only known fields.
+// Returns null if valid, or an error message string if unknown fields are found.
+function validateBodyFields(body, knownFields) {
+  if (!body || typeof body !== 'object') return null;
+  var unknown = Object.keys(body).filter(function (k) { return !knownFields.includes(k); });
+  if (unknown.length === 0) return null;
+  var hints = unknown.map(function (u) {
+    // suggest a known field if it differs only by a trailing 's' or missing trailing 's'
+    var candidate = u.endsWith('s') ? u.slice(0, -1) : u + 's';
+    if (knownFields.includes(candidate)) return u + ' (did you mean: ' + candidate + '?)';
+    return u;
+  });
+  return 'Unknown field(s) in request body: ' + hints.join(', ') +
+    '. Known fields: ' + knownFields.join(', ');
+}
+
 // Per-client request counter for generating short session-like IDs
 var clientCounters = {};
 function generateReqId(req) {
@@ -1108,6 +1124,11 @@ app.post('/api/v1/iterations/metric-types', async (req, res) => {
 // --------------------------------------------------------------------------------------------------------------
 app.post('/api/v1/iterations/breakout-values', async (req, res) => {
   try {
+    var knownFields = ['runIds', 'start', 'end', 'source', 'type', 'breakouts'];
+    var fieldErr = validateBodyFields(req.body, knownFields);
+    if (fieldErr) {
+      return res.status(400).json({ code: 'UNKNOWN_FIELDS', error: fieldErr });
+    }
     const { runIds, start, end, source, type, breakouts } = req.body;
     if (!Array.isArray(runIds) || runIds.length === 0 || !source || !type || !Array.isArray(breakouts)) {
       return res.status(400).json({ code: 'MISSING_PARAMS', error: 'runIds, source, type, and breakouts are required' });
@@ -1235,6 +1256,11 @@ app.post('/api/v1/iterations/period-info', async (req, res) => {
 // --------------------------------------------------------------------------------------------------------------
 app.post('/api/v1/iterations/supplemental-metric', async (req, res) => {
   try {
+    var knownFields = ['runIds', 'iterations', 'start', 'end', 'source', 'type', 'breakout', 'filter', 'sampleIndex'];
+    var fieldErr = validateBodyFields(req.body, knownFields);
+    if (fieldErr) {
+      return res.status(400).json({ code: 'UNKNOWN_FIELDS', error: fieldErr });
+    }
     const { runIds, iterations: reqIterations, start, end, source, type, breakout, filter, sampleIndex } = req.body;
     var breakoutArr = Array.isArray(breakout) ? breakout : [];
     var filterVal = filter || null;
@@ -1556,6 +1582,11 @@ app.get('/api/v1/fields/primary-metrics', async (req, res) => {
 // --------------------------------------------------------------------------------------------------------------
 app.post('/api/v1/metric-data', async (req, res) => {
   try {
+    var knownFields = ['run', 'period', 'begin', 'end', 'source', 'type', 'resolution', 'breakout', 'filter', 'instances'];
+    var fieldErr = validateBodyFields(req.body, knownFields);
+    if (fieldErr) {
+      return res.status(400).json({ code: 'UNKNOWN_FIELDS', error: fieldErr });
+    }
     var { run, period, begin, end, source, type, resolution, breakout, filter, instances: reqInstances } = req.body;
 
     var reqStart = Date.now();
